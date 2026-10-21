@@ -1,0 +1,16 @@
+{
+  "indeed": {
+    "jobs": [
+      {"id":"demo-101","site":"indeed","company":"Northstar Demo","title":"Software Engineer, APIs","requisition":"NS-101","job_url":"https://example.invalid/indeed/101","description":"Synthetic fixture: C#, APIs, delivery, mentoring, U.S. remote. Ohio eligible. Base $110,000 to $140,000.","min_amount":110000,"max_amount":140000},
+      {"id":"demo-102","site":"indeed","company":"Harbor Demo","title":"Applied AI Engineer","requisition":"HD-102","job_url":"https://example.invalid/indeed/102","description":"Synthetic fixture: requires two years of production agent delivery.","min_amount":120000,"max_amount":150000},
+      {"id":"demo-prior","site":"indeed","company":"Archive Demo","title":"Solutions Engineer","requisition":"AD-001","job_url":"https://example.invalid/indeed/prior","description":"Synthetic prior-application duplicate."}
+    ],
+    "messages": []
+  },
+  "linkedin": {
+    "jobs": [
+      {"id":"li-101","site":"linkedin","company":"Northstar Demo","title":"Software Engineer, APIs","requisition":"NS-101","job_url":"https://example.invalid/linkedin/101","description":null,"is_remote":false}
+    ],
+    "messages": [{"level":"ERROR","message":"Fixture HTTP 429: partial results"},{"level":"WARNING","message":"Remote filter ignored by this adapter"}]
+  }
+}

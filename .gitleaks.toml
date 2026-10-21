@@ -1,0 +1,12 @@
+title = "Job Search Agent secret scanning"
+[extend]
+useDefault = true
+
+[[rules]]
+id = "linkedin-client-secret"
+[[rules.allowlists]]
+description = "Greenhouse payload field name, not a LinkedIn credential"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^selectedLocation$''']
+paths = ['''^src/jobsearch/portal_browser\.py$''']

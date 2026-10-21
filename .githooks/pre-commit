@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+python3 scripts/check_publication.py
+scanner="$(git config --get jobsearch.gitleaks || true)"
+if [ -z "$scanner" ]; then scanner=gitleaks; fi
+if ! command -v "$scanner" >/dev/null 2>&1; then
+  echo 'Install Gitleaks or configure jobsearch.gitleaks before committing.' >&2
+  exit 1
+fi
+"$scanner" git --pre-commit --staged --redact --no-banner .
