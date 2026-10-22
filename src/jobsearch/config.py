@@ -94,12 +94,34 @@ class Settings:
     profile_id: str = "default"
     schema: str = "public"
     auth_state: Path | None = None
+    jobspy_backend: str | None = None
+    jobspy_mcp_python: Path | None = None
 
     def __post_init__(self):
         if self.state.is_relative_to(REPO):
             raise ValueError("Personal state must be outside the repository")
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.state, 0o700)
+        installation = self.auth_state or self.state
+        path = installation / "jobspy-settings.json"
+        search_config = json.loads(path.read_text()) if path.exists() else {}
+        self.jobspy_backend = (
+            self.jobspy_backend
+            or os.getenv("JSA_JOBSPY_BACKEND")
+            or search_config.get("backend", "legacy")
+        )
+        if self.jobspy_backend not in ("legacy", "official_mcp"):
+            raise ValueError("Unknown JobSpy search backend")
+        self.jobspy_mcp_python = (
+            Path(
+                self.jobspy_mcp_python
+                or os.getenv("JSA_JOBSPY_MCP_PYTHON")
+                or search_config.get("python")
+                or installation / "integrations/mcp-jobspy-1.4.0/bin/python"
+            )
+            .expanduser()
+            .absolute()
+        )
         # This successor never sends applications. Legacy deployment settings
         # cannot reactivate the retired browser executor.
         self.live_applications = False

@@ -8,7 +8,7 @@ from .search import SearchService, SearchRequest
 from .scoring import duplicate_groups
 
 mcp = MCPServer(
-    "JobSpy Local",
+    "Job Search Agent",
     version="0.1.0",
     instructions="Search results are unverified discovery evidence. Read manifest warnings and verify official openings before recommendation. Submission is not available through these tools.",
 )
@@ -20,7 +20,7 @@ def service():
 
 @mcp.tool(structured_output=True)
 def health() -> dict[str, Any]:
-    """Check the established JobSpy environment and source capabilities."""
+    """Check the selected discovery backend, pinned versions, and source capabilities."""
     return service().health()
 
 

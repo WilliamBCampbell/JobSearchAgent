@@ -23,6 +23,8 @@ class JobSpyClient:
                 "JSA_JOBSPY": str(s.jobspy),
                 "JSA_ORIGIN": s.origin,
                 "JSA_LIVE_SEARCH": "1" if s.live_search else "0",
+                "JSA_JOBSPY_BACKEND": s.jobspy_backend,
+                "JSA_JOBSPY_MCP_PYTHON": str(s.jobspy_mcp_python),
             },
         )
         async with asyncio.timeout(45):

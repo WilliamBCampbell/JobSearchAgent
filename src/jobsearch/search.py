@@ -1,17 +1,17 @@
 from __future__ import annotations
 import argparse
-import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Literal
 from pydantic import BaseModel, Field
 from .config import atomic_write, REPO
-from .db import js
+from .db import js, uid
 from .scoring import duplicate_groups
 
 
@@ -44,19 +44,26 @@ class SearchService:
         self.db = db
 
     def adapter(self):
-        path = self.db.settings.jobspy / "search_jobs.py"
-        spec = importlib.util.spec_from_file_location("established_jobspy_runner", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        from . import search_planning
+
+        return search_planning
 
     def profiles(self):
-        return json.loads(
-            (self.db.settings.jobspy / "search_profiles.json").read_text()
-        )
+        path = self.db.settings.jobspy / "search_profiles.json"
+        if path.is_file():
+            return json.loads(path.read_text())
+        from copy import deepcopy
+        from .search_planning import DEFAULT_PROFILES
+
+        return deepcopy(DEFAULT_PROFILES)
 
     def health(self):
-        python = self.db.settings.jobspy / ".venv/bin/python"
+        official = self.db.settings.jobspy_backend == "official_mcp"
+        python = (
+            self.db.settings.jobspy_mcp_python
+            if official
+            else self.db.settings.jobspy / ".venv/bin/python"
+        )
         result = (
             subprocess.run(
                 [str(python), "-m", "pip", "check"],
@@ -67,19 +74,52 @@ class SearchService:
             if python.exists()
             else None
         )
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=self.db.settings.jobspy,
-            capture_output=True,
-            text=True,
-            timeout=5,
+        commit = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.db.settings.jobspy,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if not official and self.db.settings.jobspy.is_dir()
+            else None
         )
+        versions = (
+            subprocess.run(
+                [
+                    str(python),
+                    "-c",
+                    "import json; from importlib.metadata import version; print(json.dumps({k:version(k) for k in ['python-jobspy','mcp-jobspy','mcp']}))",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if official and python.exists()
+            else None
+        )
+        from .official_jobspy import VERSION, SDK_VERSION
+
+        installed = (
+            json.loads(versions.stdout) if versions and versions.returncode == 0 else {}
+        )
+        pinned = not official or installed == {
+            "python-jobspy": VERSION,
+            "mcp-jobspy": VERSION,
+            "mcp": SDK_VERSION,
+        }
         return {
-            "available": bool(result and result.returncode == 0),
+            "available": bool(result and result.returncode == 0 and pinned),
+            "backend": self.db.settings.jobspy_backend,
+            "versions": installed,
+            "version_check": "ok"
+            if pinned
+            else "Install the pinned official MCP environment",
             "dependency_check": result.stdout.strip()
             if result
             else "JobSpy environment missing",
-            "source_commit": commit.stdout.strip(),
+            "source_commit": commit.stdout.strip() if commit and not official else None,
             "live_enabled": self.db.settings.live_search
             or self.db.setting("live_search", False),
             "capabilities": {
@@ -201,6 +241,13 @@ class SearchService:
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "status": "running",
                 "track": req.track,
+                "backend": "fixture"
+                if req.mode == "fixture"
+                else self.db.settings.jobspy_backend,
+                "upstream_version": "1.4.0"
+                if req.mode == "live"
+                and self.db.settings.jobspy_backend == "official_mcp"
+                else None,
             }
         )
         all_rows = []
@@ -222,7 +269,10 @@ class SearchService:
             site = params["site_name"][0]
             effective = params.copy()
             warnings = []
-            if site == "linkedin":
+            backend = manifest.get("backend", "legacy")
+            if backend not in ("fixture", "legacy", "official_mcp"):
+                raise ValueError("Unknown saved search backend")
+            if site == "linkedin" and backend != "official_mcp":
                 effective.pop("is_remote", None)
                 warnings.append(
                     "LinkedIn remote filter is ignored by this checkout; verify employer policy"
@@ -237,6 +287,7 @@ class SearchService:
                 "warnings": warnings,
                 "errors": [],
                 "attempts": [],
+                "backend": backend,
             }
             payload = {"jobs": [], "messages": []}
             for attempt in range(2):
@@ -246,19 +297,37 @@ class SearchService:
                     payload = fixture.get(site, {"jobs": [], "messages": []})
                     code = 0
                 else:
-                    process = subprocess.Popen(
-                        [
+                    if backend == "official_mcp":
+                        if not self.db.settings.jobspy_mcp_python.is_file():
+                            raise ValueError(
+                                "Install the official JobSpy MCP before searching"
+                            )
+                        command = [sys.executable, "-m", "jobsearch.official_jobspy"]
+                        request = {
+                            "python": str(self.db.settings.jobspy_mcp_python),
+                            "parameters": params,
+                            "output": str(
+                                folder / f"{index:03d}-{site}-official-{uid()}.json"
+                            ),
+                        }
+                    else:
+                        command = [
                             str(self.db.settings.jobspy / ".venv/bin/python"),
                             str(self.db.settings.jobspy / "search_jobs.py"),
                             "--worker",
-                        ],
+                        ]
+                        request = params
+                    process = subprocess.Popen(
+                        command,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        cwd=self.db.settings.jobspy,
+                        cwd=REPO
+                        if backend == "official_mcp"
+                        else self.db.settings.jobspy,
                         start_new_session=True,
                     )
-                    process.stdin.write(json.dumps(params).encode())
+                    process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
                     process.stdin = None
                     deadline = time.monotonic() + req.timeout
@@ -293,10 +362,23 @@ class SearchService:
                         entry["errors"].append("parser_failure")
                         payload = {"jobs": [], "messages": []}
                 messages = payload.get("messages", [])
+                entry["upstream_errors"] = payload.get("upstream_errors", {})
+                entry["upstream_warnings"] = payload.get("upstream_warnings", {})
+                source_warnings = entry["upstream_warnings"].get(site, [])
+                entry["warnings"].extend(source_warnings)
+                if site == "linkedin" and any(
+                    "is_remote" in warning and "ignor" in warning
+                    for warning in source_warnings
+                ):
+                    effective.pop("is_remote", None)
                 text = " ".join(m["message"] for m in messages)
                 if "429" in text:
                     entry["errors"].append("rate_limited")
-                if "403" in text or "CAPTCHA" in text.upper():
+                if (
+                    "403" in text
+                    or "CAPTCHA" in text.upper()
+                    or "blocked" in text.lower()
+                ):
                     entry["errors"].append("source_unavailable")
                 errors = any(m.get("level") in ("ERROR", "CRITICAL") for m in messages)
                 if code and not entry["errors"]:

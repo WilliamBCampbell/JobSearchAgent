@@ -163,7 +163,7 @@ def test_real_proposals_are_separate_from_imported_status_and_submission(db):
         "Employer", "Engineer", "NEW-1", candidate="real", discovery_key="lead-1"
     )
     assert proposal["id"] == same["id"]
-    with pytest.raises(ValueError, match="disabled"):
+    with pytest.raises(ValueError, match="retired"):
         flow.authorize(
             proposal["id"], ApprovalInput(approve=True, reviewed_hash="a" * 64)
         )

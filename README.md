@@ -8,7 +8,7 @@ After reviewing an application, select **Create submission prompt** and **Copy s
 
 ## Start
 
-Requirements: Linux, Python 3.13, Node 20.19 or later, Docker, Chromium at `/usr/bin/chromium`, LibreOffice, and Poppler. Search, including fixture searches, requires a compatible JobSpy adapter checkout with `search_jobs.py`, `search_profiles.json`, and its own `.venv`. Set `JSA_JOBSPY` to that checkout; the default is a sibling `JobSpy` directory. An unmodified upstream checkout does not include this project’s adapter contract. Package generation also requires the separately installed no-ai-slop skill described in [workspace integrations](docs/INVENTORY.md).
+Requirements: Linux, Python 3.13, Node 20.19 or later, Docker, Chromium at `/usr/bin/chromium`, LibreOffice, and Poppler. Live discovery can use the official `mcp-jobspy` server in a separate pinned environment. Run `.venv/bin/python scripts/install_jobspy_mcp.py --enable` after bootstrap, then restart the services. Offline fixture searches need no JobSpy checkout. The retained legacy backend requires the existing adapter checkout selected by `JSA_JOBSPY`. Package generation also requires the separately installed no-ai-slop skill described in [workspace integrations](docs/INVENTORY.md).
 
 ```bash
 git clone https://github.com/WilliamBCampbell/JobSearchAgent.git job-search-agent
@@ -81,9 +81,11 @@ For read-only inspection, choose **Current profile records**, import the tracker
 npm --prefix web run build
 ```
 
-Environment variables are described in `.env.example`. The application reads environment variables directly; it does not load `.env` automatically. Keep actual configuration outside the repository. `JSA_LIVE_SEARCH=1` enables read-only live board searches through the established JobSpy worker. The UI defaults to the existing workspace and presents the autonomous real-search action. MCP and the API use the same search contracts. Raw live search results go under the real workspace's `_Research`; fixture results go under the private fixture workspace.
+Environment variables are described in `.env.example`. The application reads environment variables directly; it does not load `.env` automatically. Keep actual configuration outside the repository. `JSA_LIVE_SEARCH=1` enables read-only live board searches through the selected discovery backend. The UI defaults to the existing workspace and presents the autonomous real-search action. MCP and the API use the same search contracts. Raw live search results go under the real workspace's `_Research`; fixture results go under the private fixture workspace.
 
 ## JobSpy MCP
+
+The application MCP retains durable search and workflow tools. The official upstream `mcp-jobspy` server supplies live discovery when enabled. These are separate servers with different responsibilities. Read the [comparison, live results, installation, and rollback guide](docs/JOBSPY_MCP_COMPARISON.md).
 
 Start the API worker before requesting searches through MCP. Add this stdio server to an MCP client configuration, adjusting the absolute paths if needed:
 
@@ -119,7 +121,7 @@ Package preparation runs separate structured writing and claim-review tasks thro
 | Workspace import | ODS authority, original hashes, confirmation records, scoped answers, employment corrections, deferral records, manual queue |
 | Retrieval | Versioned chunks, lexical and vector fusion, section/page/table references, neighboring and full-document expansion, rendering groups, extraction warnings |
 | Memory | Typed PostgreSQL facts, explicit confirmation, scoped commitments, correction and conflict flows, evidence-dependent caches and metrics |
-| Search | Existing JobSpy adapter, durable jobs, bounded query attempts, cancellation, manifests, source warnings, paginated MCP results |
+| Search | Official JobSpy MCP bridge or legacy worker, durable jobs, bounded queries, cancellation, full saved results, source warnings, duplicate checks |
 | Inference | Typed Codex jobs, task-specific model routes, monitored JSON output, cancellation, restart recovery, evidence-dependent caching |
 | Fit | Separate engineering and solutions rubrics, mandatory gaps, minima, Ohio and compensation caps, maximum-five shortlist function |
 | Requirement review | Confirm or deny central requirements with scoped notes; rerun fit scoring through the configured model |

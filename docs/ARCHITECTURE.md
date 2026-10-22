@@ -43,7 +43,7 @@ flowchart LR
   API --> Services
   Services --> PG[(PostgreSQL and pgvector)]
   PG --> Worker[Durable worker]
-  Worker --> JS[Existing JobSpy worker]
+  Worker --> JS[Official JobSpy MCP or legacy worker]
   Worker --> Browser[Visible application browser]
   Worker --> Files[Private documents and artifacts]
   Services --> Provider[Explicitly enabled model destination]
@@ -86,7 +86,7 @@ Implementation references were checked against the current official documentatio
 - [Ollama embeddings](https://docs.ollama.com/api/embed) and [structured chat requests](https://docs.ollama.com/api/chat) for configurable providers.
 - [Vite setup](https://vite.dev/guide/) for the pinned React build. The installed 7.x release was updated to 7.3.7 after npm audit identified issues in the initial pin.
 
-Dependencies are exact-pinned in `requirements.lock` and `web/package-lock.json`. The database image is pinned by digest. The existing JobSpy checkout and environment retain their own source commit and lock file.
+Dependencies are exact-pinned in `requirements.lock` and `web/package-lock.json`. The database image is pinned by digest. The official JobSpy MCP runs in a separate environment pinned by `requirements-jobspy-mcp.lock`. The legacy backend retains its own checkout and environment. [The comparison and integration guide](JOBSPY_MCP_COMPARISON.md) records the live sample and rollback procedure.
 
 ## Codex inference boundary
 
