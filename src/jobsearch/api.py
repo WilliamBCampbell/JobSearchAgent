@@ -43,6 +43,10 @@ class TrackerModeInput(BaseModel):
     enabled: StrictBool
 
 
+class SubmissionHandoffInput(BaseModel):
+    reviewed_hash: str = Field(min_length=64, max_length=64)
+
+
 class SelectionInput(BaseModel):
     conditional_reason: str | None = Field(default=None, max_length=2000)
     reviewed_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -181,6 +185,7 @@ def create_app(settings=None, *, manage_profiles=True):
             "status": "ok",
             "mode": "local",
             "real_submission_enabled": settings.live_applications,
+            "submission_mode": "external",
             "real_tracker_writes_enabled": settings.live_tracker_writes,
         }
 
@@ -405,6 +410,7 @@ def create_app(settings=None, *, manage_profiles=True):
     @app.get("/api/applications/{aid}")
     def application(aid: str):
         result = flow.get(aid)
+        result["submission_mode"] = "external"
         result["submission_recovery"] = (
             flow.submission_recovery(aid)
             if result["state"] == "unresolved"
@@ -709,6 +715,18 @@ def create_app(settings=None, *, manage_profiles=True):
     def fill(aid: str):
         flow.continue_prepared(aid)
         return enqueue(db, "fill", {"application_id": aid}, max_attempts=1)
+
+    @app.get("/api/applications/{aid}/submission-handoff")
+    def read_submission_handoff(aid: str):
+        from .submission_handoff import SubmissionHandoff
+
+        return SubmissionHandoff(db).latest(aid)
+
+    @app.post("/api/applications/{aid}/submission-handoff")
+    def export_submission_handoff(aid: str, data: SubmissionHandoffInput):
+        from .submission_handoff import SubmissionHandoff
+
+        return SubmissionHandoff(db).export(aid, data.reviewed_hash)
 
     @app.get("/api/applications/{aid}/review")
     def review(aid: str):

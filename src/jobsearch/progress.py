@@ -212,7 +212,7 @@ def progress(app, review_hash=None, review_error=None):
         result.instruction = (
             "Read the previews, suggest changes, or choose Documents look good."
         )
-        result.following = "Continue with employer answers and browser filling."
+        result.following = "Inspect the employer form and prepare answers."
         result.button, result.target = (
             "Review documents and suggest changes",
             "package-review",
@@ -228,8 +228,15 @@ def progress(app, review_hash=None, review_error=None):
             "Your documents are reviewed. The agent needs these answers to continue."
         )
         result.instruction = "Confirm the missing answers. Choose Global only for answers that apply across applications."
-        result.following = "After the last answer, the agent resumes filling. Any new qualification returns to fit review."
+        result.following = "After the last answer, the agent refreshes the answer plan. Any new qualification returns to fit review."
         result.button, result.target = "Go to questions", "question-" + pending[0]["id"]
+    elif payload.get("form_plan"):
+        result.step = 3
+        result.title = "Review answers and create your submission prompt"
+        result.current = "The employer fields and prepared answers are saved. Nothing has been submitted."
+        result.instruction = "Review the answers and documents, then create and copy the Codex prompt. Each answer can also be copied for manual entry."
+        result.following = "Complete the application in Codex CLI or your browser, then record employer confirmation."
+        result.button, result.target = "Go to Codex handoff", "submission-handoff"
     elif (
         state == "manual_handoff"
         and spec.get("unsupported")
@@ -249,11 +256,12 @@ def progress(app, review_hash=None, review_error=None):
         result.step = 2
         result.title = "Continue with the employer application"
         result.current = "Your reviewed documents and saved answers are ready to reuse."
-        result.instruction = (
-            "Let the agent check the current form and fill it using your saved answers."
+        result.instruction = "Let the agent open the current form, extract its fields, and prepare answers from your profile."
+        result.following = "Review the prepared answers, then copy them or create the Codex submission prompt."
+        result.button, result.action = (
+            "Inspect application and prepare answers",
+            "continue",
         )
-        result.following = "Answer any new questions, then review the filled application before approving submission."
-        result.button, result.action = "Continue to application form", "continue"
         if spec.get("unsupported") and all(r in LEGACY for r in spec["unsupported"]):
             result.title = "Refresh the form to continue with the agent"
             result.button = "Refresh form and prepare answers"

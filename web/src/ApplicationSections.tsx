@@ -1,7 +1,7 @@
 import { createContext, useContext, useLayoutEffect, useRef, type ReactNode } from "react";
 
 type Row = Record<string, any>;
-type Section = "selection" | "fit" | "documents" | "answers" | "question" | "manual-review" | "final-review" | "receipt" | "outcome" | "activity" | "controls";
+type Section = "selection" | "fit" | "documents" | "answers" | "question" | "manual-review" | "final-review" | "submission-handoff" | "receipt" | "outcome" | "activity" | "controls";
 const StageContext = createContext<{ phase: string; current: (section: Section) => boolean } | null>(null);
 
 export function ApplicationSections({ application: a, journey: p, children }: { application: Row; journey: Row; children: ReactNode }) {
@@ -20,6 +20,7 @@ export function ApplicationSections({ application: a, journey: p, children }: { 
       case "question": return !working && p.step === 2;
       case "manual-review": return !working && p.step === 3 && a.state === "manual_handoff";
       case "final-review": return !working && p.step === 3 && a.state !== "manual_handoff";
+      case "submission-handoff": return !working && (p.step === 3 || p.target === "submission-handoff");
       case "receipt": return p.step === 5;
       case "outcome": return p.target === "submission-outcome";
       case "activity": return working || p.target === "work-progress" || p.step === 4 || (p.status === "blocked" && a.jobs?.[0]?.status === "failed");

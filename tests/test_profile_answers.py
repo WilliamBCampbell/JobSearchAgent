@@ -59,6 +59,12 @@ def test_optional_profile_and_referral_fields_use_shared_memory_without_inferenc
         ),
         field("What interests you about this role?", name="question_45", required=True),
     ]
+    # Unknown narrative answers may use AI when enabled. Known profile fields
+    # must still resolve when no model destination is enabled.
+    from jobsearch.llm.service import InferenceService
+    from jobsearch.llm.routing import LLMConfig
+
+    InferenceService(db).configure(LLMConfig(backend="codex_exec", enabled=False))
     monkeypatch.setattr(
         "jobsearch.corpus.Corpus.retrieve",
         lambda *a, **k: pytest.fail("Known profile data needs no retrieval"),
@@ -184,7 +190,9 @@ async def test_change_profile_answer_scrolls_prefills_and_preserves_correction(d
         page = await browser.new_page(viewport={"width": 1200, "height": 700})
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
             await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()

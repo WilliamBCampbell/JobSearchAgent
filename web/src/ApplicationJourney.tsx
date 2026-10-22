@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { answerText } from "./answerText";
 
 type Row = Record<string, any>;
-const steps = ["Check the role", "Prepare & review documents", "Prepare answers", "Review & approve", "Send application", "Confirm receipt"];
+const steps = ["Check the role", "Prepare & review documents", "Prepare answers", "Review & export", "Submit in Codex", "Confirm receipt"];
 export const legacyGreenhouseBlockers = [
   "Greenhouse browser completion needs a portal adapter; use the saved answer plan",
   "Additional demographic or consent questions need review before browser filling",
@@ -109,8 +109,20 @@ export function applicationJourney(a: Row, review: Row | null, realSending: bool
     following: "No submission starts from this screen automatically.", button: "View saved evidence", target: "role-fit", action: "",
   };
   if (a.paused) p = {...p, title: "This application is paused", instruction: "Resume to continue from the saved step.", button: "Resume this application", action: "resume", status: "paused"};
-  if (p.step === 3 && !manual && a.candidate === "real" && !realSending) p = {...p,
+  if (a.submission_mode !== "external" && p.step === 3 && !manual && a.candidate === "real" && !realSending) p = {...p,
     following: "Sending to real employers is disabled in this deployment. Enable it in settings before approving, or use a normal-browser handoff.",
+  };
+  if (a.submission_mode === "external" && p.step === 3 && !["deferred", "closed", "skipped", "rejected"].includes(a.state) && !received && !a.paused && !job && a.payload.form_plan && !attempted) p = {...p,
+    step: 3, title: "Create your Codex submission handoff",
+    current: "Your preparation stays in this app. Employer browser work runs in Codex CLI.",
+    instruction: "Review the prepared files and answers, then create and copy the submission prompt.",
+    following: "Codex uses the packet to complete the form. Return here to record the employer confirmation.",
+    button: "Go to Codex handoff", target: "submission-handoff", action: "",
+    completed: [true, true, true, false, false, false],
+  };
+  if (a.submission_mode === "external" && ["retry-submission", "resume-approved", "continue-verification"].includes(p.action)) p = {...p,
+    title: "Continue in Codex CLI", instruction: "Create a handoff with the saved answers, files, and previous outcome. The app no longer sends applications.",
+    button: "Go to Codex handoff", target: "submission-handoff", action: "",
   };
   return p;
 }

@@ -24,10 +24,14 @@ def main():
             "recover",
             "submissions",
             "tracker-writes",
+            "handoff",
         ],
     )
     parser.add_argument("--candidate", choices=["real", "fixture"], default="real")
     parser.add_argument("--profile", default=os.getenv("JSA_PROFILE", "default"))
+    parser.add_argument(
+        "--application", help="Application ID for a portable Codex handoff"
+    )
     parser.add_argument(
         "--mode", choices=["enabled", "disabled", "status"], default="status"
     )
@@ -63,42 +67,20 @@ def main():
                 "Saved. Restart the API to apply this setting. No tracker update was queued."
             )
     elif args.command == "submissions":
-        if args.mode != "status":
-            from .config import atomic_write
+        if args.mode == "enabled":
+            raise SystemExit(
+                "In-app submission is retired. Use jobsearch handoff --application ID."
+            )
+        print(
+            "Submission runs in Codex CLI. The app exports reviewed files and application context."
+        )
+    elif args.command == "handoff":
+        from .submission_handoff import SubmissionHandoff
 
-            if os.getenv("JSA_LIVE_APPLICATIONS") is not None:
-                raise SystemExit(
-                    "Unset JSA_LIVE_APPLICATIONS before changing the saved setting; "
-                    "the environment overrides it."
-                )
-            enabled = args.mode == "enabled"
-            if enabled and not settings.live_applications:
-                pending = db.one(
-                    """SELECT count(*) AS count FROM applications a
-                    WHERE a.candidate='real' AND (
-                        a.state IN ('authorized','submission_attempt','receipt_verification')
-                        OR EXISTS (SELECT 1 FROM approvals p WHERE p.application_id=a.id AND NOT p.invalidated)
-                        OR EXISTS (SELECT 1 FROM jobs j WHERE j.kind='submit'
-                            AND j.status IN ('queued','running')
-                            AND j.input->>'application_id'=a.id)
-                    )"""
-                )
-                if pending["count"]:
-                    raise SystemExit(
-                        "Resolve existing real submission approvals or active attempts before enabling sending."
-                    )
-            atomic_write(
-                settings.state / "submission-settings.json",
-                json.dumps({"enabled": enabled}),
-            )
-            db.audit("submission_mode_changed", "deployment", {"enabled": enabled})
-            print("Saved. Restart the API and worker to apply this setting.")
-        else:
-            print(
-                "Real sending requires per-application approval."
-                if settings.live_applications
-                else "Real sending is disabled."
-            )
+        if not args.application:
+            parser.error("handoff requires --application")
+        result = SubmissionHandoff(db).export(args.application)
+        print(json.dumps(result, indent=2))
     elif args.command == "migrate":
         profiles.initialize()
         print("Migrations applied.")

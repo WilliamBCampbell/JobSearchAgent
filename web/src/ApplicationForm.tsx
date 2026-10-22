@@ -1,6 +1,7 @@
 import React from "react";
 import { answerText } from "./answerText";
 import { legacyGreenhouseBlockers } from "./ApplicationJourney";
+import { CopyButton } from "./CopyButton";
 type Row = Record<string, any>;
 
 export function AnswerScope({ question, value, onChange }: {
@@ -45,18 +46,25 @@ export function EmployerFormPlan({
   if (!plan) return null;
   const spec = plan.spec;
   const answers = application.payload.answers || {};
+  const draftFor = (field: Row) => application.questions?.find((q: Row) => q.key === field.key && (!q.answer_fact || q.needs_review))?.reason?.suggestion;
+  const valueFor = (field: Row) => {
+    if (field.type === "file") {
+      const paths = (application.artifacts || []).filter((a: Row) => application.payload.attachments?.includes(a.id) && [field.key + ".pdf", field.name + ".pdf"].includes(a.kind)).map((a: Row) => a.path);
+      return paths.length ? { value: paths } : undefined;
+    }
+    return answers[field.key] || draftFor(field);
+  };
   const legacyGreenhouse = spec.adapter === "greenhouse" &&
     spec.unsupported.some((reason: string) => legacyGreenhouseBlockers.includes(reason));
   return (
     <section className="panel" aria-label="Employer application plan">
       <h2>Employer application answers</h2>
       <p>
-        Approval covers these answers, selected files, and employer notices.
-        {spec.adapter === "greenhouse"
-          ? " The agent can fill a visible Greenhouse browser for local review. Files stay local until an approved sending run."
-          : " The agent prepares the plan locally before entering candidate information into the employer portal."}
-        {" "}Check the application status for any sending attempt.
+        The agent inspects the employer form and prepares answers from this profile.
+        Review the answers here, then copy them for manual entry or create a Codex submission prompt.
       </p>
+      <CopyButton label="Copy all questions and answers" text={spec.fields
+        .map((f: Row) => `${f.label}\n${!answers[f.key] && draftFor(f) ? "[AI draft, needs confirmation]\n" : ""}${valueFor(f) ? answerText(valueFor(f).value) : f.required ? "[Answer needed]" : "[Left blank]"}`).join("\n\n")} />
       <p>
         <a href={spec.url} target="_blank" rel="noreferrer">
           Official application form
@@ -71,7 +79,6 @@ export function EmployerFormPlan({
         </thead>
         <tbody>
           {spec.fields
-            .filter((f: Row) => f.type !== "file")
             .map((f: Row) => (
               <tr key={f.key}>
                 <th>
@@ -79,8 +86,10 @@ export function EmployerFormPlan({
                   {f.required ? " (required)" : ""}
                 </th>
                 <td>
-                  {answers[f.key]
-                    ? answerText(answers[f.key].value)
+                  <div style={{ whiteSpace: "pre-wrap" }}>
+                  {!answers[f.key] && draftFor(f) && <strong>AI draft, needs confirmation: </strong>}
+                  {valueFor(f)
+                    ? answerText(valueFor(f).value)
                     : f.required
                       ? application.questions?.some(
                           (q: Row) =>
@@ -90,6 +99,12 @@ export function EmployerFormPlan({
                         ? "Your personal perspective is needed"
                         : "Your answer is needed"
                       : "Left blank"}
+                  </div>
+                  <CopyButton label={"Copy question: " + f.label} text={f.label} />
+                  {valueFor(f) && <>
+                    <CopyButton label={"Copy answer: " + f.label} text={answerText(valueFor(f).value)} />
+                    <CopyButton label={"Copy question and answer: " + f.label} text={f.label + "\n" + (!answers[f.key] && draftFor(f) ? "[AI draft, needs confirmation]\n" : "") + answerText(valueFor(f).value)} />
+                  </>}
                   {answers[f.key] && (
                     <details>
                       <summary>Answer source</summary>
@@ -98,7 +113,7 @@ export function EmployerFormPlan({
                       </pre>
                     </details>
                   )}
-                  {onCorrect && !application.attempts?.length &&
+                  {onCorrect && f.type !== "file" && !application.attempts?.length &&
                     ["scored", "selected", "review", "missing_answers", "prepared", "manual_handoff"].includes(
                       application.state,
                     ) && (
@@ -114,7 +129,7 @@ export function EmployerFormPlan({
             ))}
         </tbody>
       </table>
-      {legacyGreenhouse && <p>Greenhouse browser filling is now available. Use Open browser and fill application to refresh this saved form plan and its notices.</p>}
+      {legacyGreenhouse && <p>Refresh the employer form to update this saved answer plan.</p>}
       {!legacyGreenhouse && spec.notices.length > 0 && (
         <>
           <h3>Employer notices</h3>
@@ -158,7 +173,7 @@ export function EmployerAnswerInput({
       else onChange(multi ? next : next[0] || blank);
     };
     return <div className="personal-answer">
-      <p>These choices are saved locally and excluded from model prompts.</p>
+      <p>These choices are saved locally and excluded from answer-generation prompts. A submission handoff includes your selected answers.</p>
       {multi ? <fieldset><legend>{field.label}</legend>{field.options.map((o: string) => <label className="checkbox" key={o}>
         <input type="checkbox" checked={selected.includes(o)} onChange={e => change(e.target.checked ? [...selected, o] : selected.filter(v => v !== o))} />{o}
       </label>)}</fieldset> : <select aria-label={field.label} required value={selected[0] || (value === blank ? blank : "")} onChange={e => change(e.target.value === blank ? [] : [e.target.value])}>

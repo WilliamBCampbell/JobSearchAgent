@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 POLICY = "2026-10-19.1"
+SUBMISSION_MODE = "external"
 
 
 def digest(value: object) -> str:
@@ -99,17 +100,9 @@ class Settings:
             raise ValueError("Personal state must be outside the repository")
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.state, 0o700)
-        if self.live_applications is None:
-            override = os.getenv("JSA_LIVE_APPLICATIONS")
-            if override is not None:
-                self.live_applications = override == "1"
-            else:
-                path = self.state / "submission-settings.json"
-                config = json.loads(path.read_text()) if path.exists() else {}
-                enabled = config.get("enabled", False)
-                if type(enabled) is not bool:
-                    raise ValueError("Submission setting 'enabled' must be a boolean")
-                self.live_applications = enabled
+        # This successor never sends applications. Legacy deployment settings
+        # cannot reactivate the retired browser executor.
+        self.live_applications = False
         if self.live_tracker_writes is None:
             override = os.getenv("JSA_LIVE_TRACKER_WRITES")
             if override is not None:

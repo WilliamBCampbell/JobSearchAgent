@@ -6,6 +6,10 @@ from .db import uid, js
 
 
 def enqueue(db, kind, payload, max_attempts=3):
+    if kind in ("submit", "continue_verification", "reconcile"):
+        raise ValueError(
+            "Submission runs in Codex CLI. Create a submission handoff instead."
+        )
     jid = uid()
     with db.tx() as c:
         if payload.get("application_id"):
@@ -114,6 +118,10 @@ class Worker:
 
     async def dispatch(self, job):
         kind = job["kind"]
+        if kind in ("submit", "continue_verification", "reconcile"):
+            raise ValueError(
+                "This legacy browser job is retired. Create a Codex submission handoff."
+            )
         data = job["input"]
         jid = job["id"]
         from .workflow import Workflow
@@ -414,7 +422,10 @@ class Worker:
             )
             return {"state": "prepared", "next_job": next_job["job_id"]}
         if kind == "fill":
-            result = await self.browser.fill(
+            from .forms import FormPreparation
+
+            result = await asyncio.to_thread(
+                FormPreparation(self.db).plan,
                 data["application_id"],
                 jid,
                 lambda value: self.checkpoint(jid, value),
@@ -435,14 +446,6 @@ class Worker:
                 )
                 result["next_job"] = next_job["job_id"]
             return result
-        if kind == "submit":
-            return await self.browser.submit(data["application_id"])
-        if kind == "reconcile":
-            return await self.browser.reconcile(data["application_id"])
-        if kind == "continue_verification":
-            return await self.browser.greenhouse.continue_verification(
-                data["application_id"]
-            )
         raise ValueError("Unsupported job kind")
 
     async def run_once(self):

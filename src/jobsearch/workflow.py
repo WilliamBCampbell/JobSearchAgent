@@ -1,10 +1,9 @@
 from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
-import json
 from pydantic import BaseModel, Field
 from typing import Literal
-from .config import digest, file_hash, atomic_write, POLICY
+from .config import digest, file_hash, POLICY
 from .db import uid, js
 from .memory import Memory, FactInput
 from .answer_scopes import allows_global, fact_allows_global
@@ -753,53 +752,9 @@ class Workflow:
         return {"fact_id": fact["id"], "remaining": bool(remaining)}
 
     def authorize(self, aid, request: ApprovalInput):
-        if (
-            self.get(aid)["candidate"] != "fixture"
-            and not self.db.settings.live_applications
-        ):
-            raise ValueError(
-                "Real sending is disabled in this deployment; the prepared application remains available for review"
-            )
-        with self.db.tx() as c:
-            app = self.get(aid, c)
-            self.editable(app)
-            from .progress import document_review_needed
-
-            if document_review_needed(app):
-                raise ValueError(
-                    "Review the current document version before approving submission"
-                )
-            if app["payload"].get("form_plan"):
-                from .forms import FormPreparation
-
-                FormPreparation(self.db).validate_ready(app)
-            elif app["candidate"] != "fixture":
-                raise ValueError("A supported employer form plan is required")
-            if app["state"] != "review":
-                raise ValueError("Complete the form and review before approving")
-            review = self.review(aid)
-            if review["questions"]:
-                raise ValueError("Required answers remain unresolved")
-            if review["hash"] != request.reviewed_hash:
-                raise ValueError("Review changed; inspect the updated payload")
-            if app["payload"].get("browser_hash") != review["hash"]:
-                raise ValueError("Visible form no longer matches the reviewed payload")
-            if not review["payload"]["attachments"]:
-                raise ValueError("Choose the documents actually attached")
-            auth = uid()
-            c.execute(
-                "INSERT INTO approvals(id,application_id,payload_hash,actor) VALUES(%s,%s,%s,'user-ui')",
-                (auth, aid, review["hash"]),
-            )
-            self.transition(
-                aid,
-                "authorized",
-                {"approval_id": auth, "payload_hash": review["hash"]},
-                c,
-            )
-        from .queue import enqueue
-
-        return enqueue(self.db, "submit", {"application_id": aid}, max_attempts=3)
+        raise ValueError(
+            "In-app submission is retired. Create a Codex submission handoff."
+        )
 
     def greenhouse_stopped_before_send(self, app, attempt):
         """Only a completed guarded run can establish that no POST was released."""
@@ -969,115 +924,14 @@ class Workflow:
         return {"state": app["state"], "can_retry": True, "sending_queued": False}
 
     def retry_submission(self, aid):
-        with self.db.tx() as c:
-            app = self.get(aid, c)
-            self.editable(app)
-            recovery = self.submission_recovery(aid, validate=True)
-            if not recovery["can_retry"]:
-                raise ValueError(
-                    recovery.get(
-                        "reason",
-                        "Reconcile the existing submission outcome before retrying.",
-                    )
-                )
-            c.execute(
-                "UPDATE attempts SET state='retry_ready' WHERE application_id=%s",
-                (aid,),
-            )
-            # Dedicated recovery gate, not an unrestricted state transition.
-            c.execute(
-                "UPDATE applications SET state='authorized',revision=revision+1,updated_at=now() WHERE id=%s",
-                (aid,),
-            )
-            c.execute(
-                "UPDATE followups SET resolved=true WHERE id=%s",
-                (digest([aid, "manual_application"]),),
-            )
-            self.db.audit(
-                "submission.retry_requested", aid, {"reuses_approval": True}, c
-            )
-        from .queue import enqueue
-
-        return enqueue(self.db, "submit", {"application_id": aid}, max_attempts=1)
+        raise ValueError(
+            "In-app submission is retired. Export the prior outcome in a Codex handoff."
+        )
 
     def begin_attempt(self, aid, mark_attached=True):
-        with self.db.tx() as c:
-            app = self.get(aid, c)
-            self.editable(app)
-            if app["state"] != "authorized":
-                raise ValueError("Matching application authorization is required")
-            payload = self.review_payload(app)
-            hash_ = digest(payload)
-            approval = c.execute(
-                "SELECT * FROM approvals WHERE application_id=%s AND payload_hash=%s AND NOT invalidated ORDER BY created_at DESC LIMIT 1",
-                (aid, hash_),
-            ).fetchone()
-            if not approval:
-                raise ValueError("Authorization is absent or no longer matches")
-            existing = c.execute(
-                "SELECT * FROM attempts WHERE application_id=%s", (aid,)
-            ).fetchone()
-            if existing and (
-                mark_attached
-                or existing["state"] != "retry_ready"
-                or existing["payload_hash"] != hash_
-                or existing["approval_id"] != approval["id"]
-                or not (
-                    self.greenhouse_stopped_before_send(app, existing)
-                    or self.confirmed_verification_stop(app, existing)
-                )
-            ):
-                raise ValueError(
-                    "An attempt already exists; reconcile it before any retry"
-                )
-            attempt = existing["id"] if existing else uid()
-            if existing:
-                self.db.audit(
-                    "submission.previous_run_preserved",
-                    aid,
-                    {
-                        "attempt_id": existing["id"],
-                        "result": existing["result"],
-                    },
-                    c,
-                )
-                c.execute(
-                    "UPDATE attempts SET state='started',result=%s WHERE id=%s",
-                    (js({"run_id": uid(), "send_started": False}), attempt),
-                )
-            else:
-                c.execute(
-                    "INSERT INTO attempts(id,application_id,payload_hash,approval_id,state,result) VALUES(%s,%s,%s,%s,'started',%s)",
-                    (
-                        attempt,
-                        aid,
-                        hash_,
-                        approval["id"],
-                        js({"run_id": uid(), "send_started": False}),
-                    ),
-                )
-            self.transition(aid, "submission_attempt", {"attempt_id": attempt}, c)
-            for artifact in payload["attachments"]:
-                c.execute(
-                    "UPDATE artifacts SET attached=attached OR %s,immutable=true WHERE id=%s",
-                    (mark_attached, artifact["id"]),
-                )
-            # Durable attempt exists before the browser can perform a final action.
-        frozen = self.db.settings.state / "submitted-payloads" / f"{attempt}.json"
-        atomic_write(frozen, json.dumps(payload, indent=2, default=str))
-        for artifact in payload["attachments"]:
-            row = self.db.one("SELECT * FROM artifacts WHERE id=%s", (artifact["id"],))
-            source = Path(row["path"])
-            target = (
-                self.db.settings.state
-                / "submitted-documents"
-                / artifact["hash"]
-                / source.name
-            )
-            if not target.exists():
-                atomic_write(target, source.read_bytes())
-                target.chmod(0o400)
-        return attempt
+        raise ValueError(
+            "This application does not create browser submission attempts."
+        )
 
     def record_receipt(self, aid, attempt_id, evidence, kind="employer_confirmation"):
         if kind not in ("employer_confirmation", "user_confirmation"):

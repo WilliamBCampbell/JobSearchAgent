@@ -1,4 +1,4 @@
-"""Official MCP SDK v2 stdio server. No application submission tool is exposed."""
+"""Preparation and portable handoff tools. Browser submission is external."""
 
 from typing import Any
 from mcp.server import MCPServer
@@ -65,6 +65,18 @@ def normalize_results(rows: list[dict], candidate: str = "fixture") -> dict[str,
             rows, db.all("SELECT * FROM applications WHERE candidate=%s", (candidate,))
         )
     }
+
+
+@mcp.tool(structured_output=True)
+def export_submission_handoff(
+    application_id: str, reviewed_hash: str
+) -> dict[str, Any]:
+    """Snapshot this profile's files and context for Codex. Never upload or submit."""
+    from .submission_handoff import SubmissionHandoff
+
+    return SubmissionHandoff(DB(selected_settings())).export(
+        application_id, reviewed_hash
+    )
 
 
 def main():

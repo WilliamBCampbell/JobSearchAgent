@@ -1,6 +1,10 @@
 # Job Search Agent
 
-A local job-search application with user profiles, a guided React UI, PostgreSQL state and retrieval, a JobSpy MCP server, versioned document packages, and a visible browser worker. The search agent uses real JobSpy sources through MCP, verifies openings, evaluates fit through Codex, and prepares qualifying packages. Browser submission is tested with synthetic candidate data and a local employer form. Existing personal records are imported read-only.
+A local job-search preparation application with user profiles, a React UI, PostgreSQL retrieval, JobSpy search tools, and versioned resumes, cover letters, and answers. Submission happens in a separate Codex CLI conversation using an exported prompt and private packet with absolute document paths and application context. The app does not upload or submit applications.
+
+The prior browser-submission implementation is archived in [JobSearchAgentSubmission](https://github.com/WilliamBCampbell/JobSearchAgentSubmission). Read the [migration plan](docs/EXTERNAL_SUBMISSION_PLAN.md) for the current boundary and follow-up work.
+
+After reviewing an application, select **Create submission prompt** and **Copy submission prompt**. You can also export with `jobsearch handoff --profile PROFILE_ID --application APPLICATION_ID`. Paste the prompt into Codex CLI using your configured Playwright or Puppeteer tools. Return to the app to record employer receipt and review tracker updates. Exporting alone never marks an application submitted.
 
 ## Start
 
@@ -46,7 +50,7 @@ Existing records stay in **My profile**. Each additional profile starts with emp
 
 Profiles share this installation's local access token. Anyone with that token can manage all profiles; profiles are not separate login accounts. The worker processes all profiles automatically. CLI operations accept `--profile <id>`, and external MCP servers select one with `JSA_PROFILE=<id>` while keeping `JSA_STATE` pointed at the installation's state directory. Profile IDs are available in the page URL and `GET /api/profiles`. The MCP `list_profiles` tool still lists JobSpy search presets.
 
-New profiles have disabled saved sending and tracker-write settings. Explicit deployment environment overrides still apply. Model evidence transfer must be enabled separately in each profile. [Profile storage and routing](docs/ARCHITECTURE.md#user-profile-isolation) describes the database migration and request boundary.
+In-app submission is disabled for every profile. Tracker writes have a separate deployment setting. Model evidence transfer must be enabled separately in each profile. [Profile storage and routing](docs/ARCHITECTURE.md#user-profile-isolation) describes the database migration and request boundary.
 
 ## Demonstration
 
@@ -98,7 +102,7 @@ Start the API worker before requesting searches through MCP. Add this stdio serv
 }
 ```
 
-Tools: `health`, `list_profiles`, `start_search`, `search_progress`, `search_results`, `cancel_search`, and `normalize_results`. They use the same service contracts as the API. No submission or outreach tool is exposed.
+Tools: `health`, `list_profiles`, `start_search`, `search_progress`, `search_results`, `cancel_search`, `normalize_results`, and `export_submission_handoff`. The exporter returns a private packet path and a copyable prompt with prepared fields and answers. They use the same service contracts as the API. No submission or outreach tool is exposed.
 
 ## Models and retrieval
 
@@ -120,7 +124,7 @@ Package preparation runs separate structured writing and claim-review tasks thro
 | Fit | Separate engineering and solutions rubrics, mandatory gaps, minima, Ohio and compensation caps, maximum-five shortlist function |
 | Requirement review | Confirm or deny central requirements with scoped notes; rerun fit scoring through the configured model |
 | Packages | HTML, DOCX, PDF, answer records, review page, evidence IDs, immutable submitted copies, actual-attachment tracking |
-| Workflow | Durable states, user questions, pause/resume, visible Greenhouse review, approval-bound Lever/Greenhouse/Breezy senders, attempt checkpoint, receipt reconciliation |
+| Workflow | Durable states, form inspection, profile-based answers, copy controls, private Codex handoff packets, pause/resume, receipt review |
 | Intervention inbox | Persistent notices, manual handoffs for uncertain required answers, acknowledgment without clearing blockers, scoped confirmations, automatic resumption |
 | Records | Read-only real imports, conflict resolution, fixture ODS updates, backups, atomic replacement, journals, notes/checklist/handoff, manual reports |
 | Privacy | Localhost services, token authentication, origin checks, isolated browser profiles, artifact path restrictions, no hosted transfer by default |
@@ -131,7 +135,7 @@ In **Fit assessment**, use **Confirm** or **Deny** for central requirements, add
 
 ## Limits
 
-Real employer submission is available through the existing final-review approval when sending is enabled. New installs default to disabled; [operations](docs/OPERATIONS.md#approval-driven-sending) explains the persistent setting. Real tracker writes can be enabled on **Metrics & tracker**, with a reviewed preview for each update. [Tracker controls](docs/TRACKER.md) describe backups and recovery. Lever, Greenhouse, and Breezy have fixture-tested executors with approval, request validation, receipts, and restart recovery. Greenhouse can fill its visible browser for local review while keeping files and answers off the employer's servers. Its live control structure was checked with fictitious data and outbound application traffic blocked; production submission acceptance has not been tested. Required education, additional demographic or consent controls, other Greenhouse storage regions, Workday account flows, CAPTCHA, and unrecognized controls still need review or a normal-browser handoff. [Employer form adapters](docs/EMPLOYER_FORMS.md) describe the coverage. The existing Firefox fill-only tool is preserved; this application does not claim universal ATS automation.
+The app reads Lever, Greenhouse, and Breezy application forms and prepares answers, including profile-based AI suggestions when needed. Each question and answer can be copied separately or together. The submission prompt includes those fields and answers plus absolute paths to the selected documents. Unsupported forms need inspection in the external browser session. Codex CLI handles form entry, uploads, and submission; CAPTCHA and employer verification can still require your intervention. Legacy sending settings cannot enable the retired in-app senders. Record actual employer confirmation afterward. Real tracker writes retain their separate reviewed preview and deployment setting. [Tracker controls](docs/TRACKER.md) describe backups and recovery.
 
 Official verification requires an allowed employer host, an identifiable requisition, an open page, and an application link. Redirects and ambiguous pages need review. Search fixtures do not prove current real openings. Live JobSpy searches and read-only employer verification have been demonstrated; discovery alone does not establish that an opening is current.
 

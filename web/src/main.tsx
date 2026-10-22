@@ -16,6 +16,7 @@ import { applicationJourney, ApplicationJourney, ManualPackageReview, hasGreenho
 import { PackageReview } from "./PackageReview";
 import { CreateUserProfile, UserProfiles, profileUrl } from "./UserProfiles";
 import { EmployerApplicationLink } from "./EmployerApplicationLink";
+import { SubmissionHandoff } from "./SubmissionHandoff";
 
 type Row = Record<string, any>;
 let unlockToken = "";
@@ -123,7 +124,7 @@ function App() {
     if (!panel) return;
     navigateSection("question-" + focusQuestionId);
     const input = panel.querySelector<HTMLElement>(
-      "input:not([type=radio]), textarea, select",
+      "form input:not([type=radio]), form textarea, form select",
     );
     const target = input || panel;
     target.scrollIntoView({ block: "center" });
@@ -965,6 +966,8 @@ function App() {
                 value={application.paused ? "paused" : application.progress?.status === "blocked" ? "needs_attention" : application.progress?.status === "working" ? "working" : application.state}
               />
             </section>
+            {!application.imported && (application.payload.package || application.payload.attachments?.length > 0) &&
+              <SubmissionHandoff application={application} review={review} api={api} onSaved={() => { void refresh(); }} />}
             {!application.imported && <ApplicationJourney
               application={application} review={review} realSending={overview.real_submission_enabled}
               busy={busy} onAction={action} onNavigate={navigateSection}
@@ -1010,7 +1013,7 @@ function App() {
                     Discard
                   </button>
                 )}
-                {(application.attempts?.length > 0 || ["unresolved", "receipt_verification"].includes(application.state)) && <button
+                {application.submission_mode !== "external" && (application.attempts?.length > 0 || ["unresolved", "receipt_verification"].includes(application.state)) && <button
                   className="text-button"
                   onClick={() =>
                     run(() => api("/applications/" + appId + "/reconcile", {}))
@@ -1265,19 +1268,18 @@ function App() {
                   <WorkflowSection section="answers" id="prepared-answers" summary="Prepared answers and sources">
                   <EmployerFormPlan
                     application={application}
-                    onCorrect={(key) =>
-                      run(async () => {
-                        const result = await api(
+                    onCorrect={async (key) => {
+                        const result = await run(() => api(
                           "/applications/" + appId + "/review-answer",
                           { key },
-                        );
+                        ));
+                        if (!result) return;
                         setAnswerDrafts(previous => previous[result.question_id] !== undefined
                           ? previous
                           : { ...previous, [result.question_id]: result.current_value ?? "" });
                         setEditingQuestion(result.question_id);
                         setFocusQuestionId(result.question_id);
-                      })
-                    }
+                    }}
                   />
                   </WorkflowSection>
                 )}
@@ -1523,46 +1525,7 @@ function App() {
                         ? pretty(review.payload.consents)
                         : "No additional consents recorded."}
                     </p>
-                    <p>
-                      The approval covers these exact answers and document
-                      versions. Changes require a new review.
-                    </p>
-                    {application.candidate === "real" &&
-                      overview.real_submission_enabled && (
-                        <p>
-                          Approve &amp; send uploads the selected files and sends
-                          these answers to the employer. The agent checks for
-                          confirmation and records the outcome here.
-                        </p>
-                      )}
-                    {application.candidate === "real" &&
-                      !overview.real_submission_enabled && (
-                        <p>
-                          Sending to real employers is disabled in this
-                          deployment. This review is available for inspection or
-                          a normal-browser handoff.
-                        </p>
-                      )}
-                    {application.state === "review" && application.progress?.step === 3 && <button
-                      className="approve"
-                      disabled={
-                        busy ||
-                        application.paused ||
-                        application.payload.browser_hash !== review.hash ||
-                        (application.candidate === "real" &&
-                          !overview.real_submission_enabled)
-                      }
-                      onClick={() =>
-                        action("approve", {
-                          approve: true,
-                          reviewed_hash: review.hash,
-                        })
-                      }
-                    >
-                      {application.candidate === "fixture"
-                        ? "Approve & submit fixture application"
-                        : "Approve & send this application"}
-                    </button>}
+                    <p>Review these answers and document versions, then create a Codex submission prompt above. The app will not upload or submit them.</p>
                   </section>
                   </WorkflowSection>
                 )}
@@ -1603,7 +1566,7 @@ function App() {
                   }}>
                   Confirm not submitted
                 </button>
-                <p>This records the outcome. You can then choose Retry approved application.</p>
+                <p>This records the outcome. Create an updated Codex handoff afterward.</p>
               </section></WorkflowSection>
             )}
             {((application.state === "unresolved" && !application.submission_recovery?.can_retry) || (application.state === "manual_handoff" && (manualReceiptOpen || application.attempts?.length > 0))) && (
@@ -1843,9 +1806,7 @@ function App() {
                 Source workspace: <code>{settings.workspace}</code>
               </p>
               <p>
-                {settings.real_submission_enabled
-                  ? "Real applications can be sent after you approve each application in final review."
-                  : "Sending to real employers is disabled."}{" "}
+                Applications are submitted through Codex CLI using an exported prompt and prepared files.{" "}
                 {settings.real_tracker_writes_enabled ? "Reviewed tracker writes are enabled." : "Tracker writes are disabled."}{" "}
                 Live JobSpy searches are{" "}
                 {settings.live_search ? "enabled" : "disabled"}.

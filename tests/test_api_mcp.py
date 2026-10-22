@@ -1,6 +1,5 @@
 import os
 import sys
-import pytest
 from fastapi.testclient import TestClient
 from jobsearch.api import create_app
 from jobsearch.fixtures import seed
@@ -61,6 +60,7 @@ async def test_mcp_protocol_tools_and_durable_search(db):
             "search_results",
             "cancel_search",
             "normalize_results",
+            "export_submission_handoff",
         } <= names
         profiles = await client.call_tool("list_profiles", {})
         assert not profiles.is_error
@@ -83,6 +83,23 @@ async def test_mcp_protocol_tools_and_durable_search(db):
             structured = structured["result"]
         assert structured["total"] >= 2 and len(structured["results"]) == 1
         assert structured["manifest"]["status"] == "partial"
+        from .test_package_revisions import prepared
+
+        flow, aid = prepared(db, reviewed=True)
+        exported = await client.call_tool(
+            "export_submission_handoff",
+            {
+                "application_id": aid,
+                "reviewed_hash": flow.review(aid)["hash"],
+            },
+        )
+        assert not exported.is_error
+        packet = exported.structured_content
+        if "result" in packet:
+            packet = packet["result"]
+        assert packet["mode"] == "submit"
+        assert "application.json" in packet["prompt"]
+        assert not db.all("SELECT * FROM attempts")
 
 
 def test_handoff_is_readable_and_requires_local_auth(db):

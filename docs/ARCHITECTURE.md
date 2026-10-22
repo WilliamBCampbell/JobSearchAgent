@@ -1,5 +1,9 @@
 # Architecture decisions
 
+## Current submission boundary
+
+The [external submission migration](EXTERNAL_SUBMISSION_PLAN.md) supersedes the native browser execution sections below. The app exports private application packets for a separate Codex CLI browser session. Queue admission and dispatch reject legacy submission, browser reconciliation, and verification jobs. Legacy sending settings cannot enable those actions. Read-only employer application inspection, field extraction, profile-based suggested answers, document review, history, receipt review, and reviewed tracker writes remain in the app. The copied prompt contains the extracted fields and answers as well as full document paths. Individual questions and answers can also be copied for manual entry. Native executor details below document the archived predecessor and are retained while its modules and tests are retired.
+
 The application consists of a FastAPI service, a React/TypeScript UI, a separate Python worker, PostgreSQL 17 with pgvector, and an MCP stdio server. Personal state lives under `JSA_STATE`; originals stay under `JSA_WORKSPACE`. The API binds to `127.0.0.1:8765` and the database binds to `127.0.0.1:55432`.
 
 ## User profile isolation
