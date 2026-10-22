@@ -18,6 +18,7 @@ from .documents.rendering import (
     TEMPLATE_HASH,
     check_dependencies,
     document_html,
+    validate_cover_letter_html,
     render,
 )
 
@@ -259,10 +260,12 @@ class Packages:
                 for kind in ["resume", "cover_letter"] if include_cover else ["resume"]:
                     stem = f"{slug(profile['name']).replace('-', '_')}_{slug(app['employer'])}_{slug(app['requisition'])}_{'Resume' if kind == 'resume' else 'Cover_Letter'}"
                     source = stage / (stem + ".html")
-                    atomic_write(
-                        source,
-                        document_html(kind, document, packet["facts"], profile, app),
+                    rendered = document_html(
+                        kind, document, packet["facts"], profile, app
                     )
+                    if kind == "cover_letter":
+                        validate_cover_letter_html(rendered, app)
+                    atomic_write(source, rendered)
                     progress({"stage": "Rendering " + kind.replace("_", " ")})
                     checks[kind] = render(source, cancelled)
                     claim_ids = set(profile["fact_ids"])
@@ -356,6 +359,12 @@ class Packages:
             path = folder / filename
             if not path.is_file() or file_hash(path) != expected:
                 raise PackageIntegrityError("An immutable package version changed")
+        # Check cached output too before registering or reusing an attachment.
+        for record in manifest["documents"]:
+            if record["kind"] == "cover_letter.html":
+                validate_cover_letter_html(
+                    (folder / record["filename"]).read_text(), app
+                )
         files, previews = [], []
         for record in manifest["documents"]:
             path = folder / record["filename"]

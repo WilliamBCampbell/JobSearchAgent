@@ -148,9 +148,26 @@ class OfficialOpenings:
             identity = self.get_json(base)
             if not same_company(identity.get("name", ""), lead["company"]):
                 raise ValueError("Official board employer does not match the discovery")
-            data = self.get_json(
-                base + f"/jobs/{job}?questions=true&pay_transparency=true"
-            )
+            try:
+                data = self.get_json(
+                    base + f"/jobs/{job}?questions=true&pay_transparency=true"
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in (404, 410):
+                    raise
+                # The employer identity was checked above. A missing exact job
+                # is different from an unavailable board or a transient error.
+                return {
+                    "open": False,
+                    "status": "unavailable",
+                    "reason": f"The employer no longer lists this opening (HTTP {exc.response.status_code}).",
+                    "url": url,
+                    "application_url": url,
+                    "requisition": str(lead.get("requisition") or job),
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "verification_source": base + f"/jobs/{job}",
+                    "raw_sources": self.responses.copy(),
+                }
             if str(data.get("id")) != job:
                 raise ValueError("Official requisition mismatch")
             return self.capture(
@@ -365,7 +382,9 @@ class OfficialOpenings:
                             )
             except (httpx.HTTPError, ValueError, KeyError, OSError) as exc:
                 errors.append(
-                    str(exc)[:180]
+                    f"The employer returned HTTP {exc.response.status_code} while checking the opening."
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    else str(exc)[:180]
                     if isinstance(exc, ValueError)
                     else type(exc).__name__
                 )
@@ -373,5 +392,6 @@ class OfficialOpenings:
             "open": False,
             "status": "unverified",
             "reason": "No current official opening could be established",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "errors": errors,
         }

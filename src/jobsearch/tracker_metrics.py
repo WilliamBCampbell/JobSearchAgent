@@ -59,7 +59,7 @@ def dashboard(db, candidate):
             )["n"],
             "App workflows": len(apps),
             "Workflows with receipts": db.one(
-                "SELECT count(DISTINCT r.application_id) AS n FROM receipts r JOIN applications a ON a.id=r.application_id WHERE a.candidate=%s AND NOT a.imported",
+                "SELECT count(DISTINCT r.application_id) AS n FROM receipts r JOIN applications a ON a.id=r.application_id WHERE a.candidate=%s AND NOT a.imported AND NOT COALESCE((r.evidence->>'invalidated')::boolean,false)",
                 (candidate,),
             )["n"],
         },

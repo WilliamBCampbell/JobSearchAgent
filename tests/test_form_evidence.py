@@ -11,6 +11,7 @@ from jobsearch.llm.service import InferenceService
 from jobsearch.llm.runner import InferenceFailure, InferenceStopped
 from jobsearch.memory import Memory, FactInput
 from jobsearch.workflow import Workflow
+from jobsearch.form_policy import personal_question
 from .test_llm import application
 from .test_browser import fixture_server  # noqa: F401
 
@@ -51,7 +52,9 @@ def evaluator(monkeypatch, fact, value="5", decision="answer", supported=True):
                 "answers": [
                     {
                         "key": f["key"],
-                        "decision": decision,
+                        "decision": "draft"
+                        if decision == "answer" and personal_question(f)
+                        else decision,
                         "value": value,
                         "fact_ids": [fact["id"]],
                         "source_refs": [],
@@ -90,27 +93,30 @@ def test_form_task_has_resume_writer_career_context_but_not_other_role_commitmen
     assert any(s["kind"] == "employer_source" for s in form["sources"])
 
 
-def test_personal_question_abstains_even_with_resume_and_generated_motivation(
+def test_personal_question_drafts_career_connection_without_generated_motivation(
     db, monkeypatch
 ):
     app = application(db)
     path = db.settings.fixture_workspace / "Generated_Cover_Letter.md"
     path.write_text("I have always been passionate about this company's mission.")
     Corpus(db).ingest(path.name, "fixture", kind="generated_draft")
-    monkeypatch.setattr(
-        InferenceService,
-        "run",
-        lambda *a, **k: pytest.fail(
-            "Career fit cannot supply missing personal motives"
-        ),
+    fact = confirmed(db, "api_example", "Built customer APIs.", "skill")
+    evaluator(
+        monkeypatch,
+        fact,
+        value="I would bring my experience building customer APIs to this role.",
+        decision="draft",
     )
     service = FormAnswers(db)
     spec = field(PERSONAL)
     result = service.prepare(app, [spec])[spec["key"]]
-    assert result["reason"]["code"] == "personal_context_needed"
+    assert result["reason"]["code"] == "draft_needs_review"
     assert result["reason"]["context"]
-    assert "suggestion" not in result["reason"] and "value" not in result
-    assert not db.all("SELECT * FROM llm_runs")
+    assert "suggestion" in result["reason"] and "value" not in result
+    packet = service.service.context(service.request(app, [spec]))
+    assert not packet["personal_context_ids"]
+    assert "always been passionate" not in str(packet)
+    assert not db.all("SELECT * FROM facts WHERE key=%s", (spec["key"],))
 
 
 def test_model_cannot_label_career_experience_as_personal_interest(db):
@@ -121,7 +127,7 @@ def test_model_cannot_label_career_experience_as_personal_interest(db):
         "answers": [
             {
                 "key": packet["form_fields"][0]["key"],
-                "decision": "draft",
+                "decision": "answer",
                 "value": "I have always loved your mission.",
                 "fact_ids": [packet["facts"][0]["id"]],
                 "source_refs": [],
@@ -305,11 +311,14 @@ async def test_personal_question_handoff_shows_shared_evidence_and_blank_answer(
         page = await browser.new_page()
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             await expect(
-                page.get_by_text("YOUR PERSONAL PERSPECTIVE IS NEEDED", exact=True)
+                page.get_by_text("YOUR ANSWER IS NEEDED", exact=True)
             ).to_be_visible()
             await expect(
                 page.get_by_role("textbox", name=PERSONAL, exact=True)

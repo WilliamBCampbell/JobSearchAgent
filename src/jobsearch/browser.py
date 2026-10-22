@@ -35,10 +35,14 @@ class BrowserWorker:
         from .greenhouse_browser import GreenhouseBrowser
 
         self.greenhouse = GreenhouseBrowser(db)
+        from .breezy_browser import BreezyBrowser
+
+        self.breezy = BreezyBrowser(db)
 
     async def close(self):
         await self.portal.close()
         await self.greenhouse.close()
+        await self.breezy.close()
         for context, page in self.sessions.values():
             await context.close()
         self.sessions = {}
@@ -66,7 +70,7 @@ class BrowserWorker:
             viewport={"width": 1100, "height": 850},
             service_workers="block",
             args=["--disable-background-networking"],
-            extra_http_headers={"X-JSA-Token": self.db.settings.token()},
+            extra_http_headers=self.db.settings.local_headers(),
         )
 
         async def route_handler(route):
@@ -126,7 +130,7 @@ class BrowserWorker:
             }
         if app["candidate"] != "fixture" or app["payload"].get(
             "scenario", ""
-        ).startswith(("lever", "greenhouse")):
+        ).startswith(("lever", "greenhouse", "breezy")):
             import asyncio
             from .forms import FormPreparation
 
@@ -138,6 +142,8 @@ class BrowserWorker:
                 and result.get("adapter") == "greenhouse"
             ):
                 return await self.greenhouse.stage(aid)
+            if result.get("state") == "review" and result.get("adapter") == "breezy":
+                return await self.breezy.stage(aid)
             return result
         self.workflow.editable(app)
         if app["paused"]:
@@ -309,6 +315,8 @@ class BrowserWorker:
         if app["payload"].get("form_plan"):
             if app["payload"]["form_plan"]["spec"]["adapter"] == "greenhouse":
                 return await self.greenhouse.submit(aid)
+            if app["payload"]["form_plan"]["spec"]["adapter"] == "breezy":
+                return await self.breezy.submit(aid)
             return await self.portal.submit(aid)
         if app["paused"]:
             raise ValueError("Application is paused")
@@ -401,6 +409,8 @@ class BrowserWorker:
         if app["payload"].get("form_plan"):
             if app["payload"]["form_plan"]["spec"]["adapter"] == "greenhouse":
                 return await self.greenhouse.reconcile(aid)
+            if app["payload"]["form_plan"]["spec"]["adapter"] == "breezy":
+                return await self.breezy.reconcile(aid)
             return await self.portal.reconcile(aid)
         if aid not in self.sessions:
             return {
@@ -507,8 +517,7 @@ class BrowserWorker:
             lines.append(
                 '<li><a href="'
                 + self.db.settings.origin
-                + "/api/artifacts/"
-                + artifact["id"]
+                + self.db.settings.profile_url("/api/artifacts/" + artifact["id"])
                 + '">'
                 + html.escape(artifact["name"])
                 + "</a> ("
@@ -537,5 +546,5 @@ class BrowserWorker:
             "state": app["state"],
             "path": str(path),
             "reason": reason,
-            "review_url": "/api/handoffs/" + aid,
+            "review_url": self.db.settings.profile_url("/api/handoffs/" + aid),
         }

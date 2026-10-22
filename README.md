@@ -1,6 +1,6 @@
 # Job Search Agent
 
-A running local job-search workspace with a guided React UI, PostgreSQL state and retrieval, a JobSpy MCP server, versioned document packages, and a visible browser worker. The search agent uses real JobSpy sources through MCP, verifies openings, evaluates fit through Codex, and prepares qualifying packages. Browser submission is tested with synthetic candidate data and a local employer form. Existing personal records are imported read-only.
+A local job-search application with user profiles, a guided React UI, PostgreSQL state and retrieval, a JobSpy MCP server, versioned document packages, and a visible browser worker. The search agent uses real JobSpy sources through MCP, verifies openings, evaluates fit through Codex, and prepares qualifying packages. Browser submission is tested with synthetic candidate data and a local employer form. Existing personal records are imported read-only.
 
 ## Start
 
@@ -36,9 +36,21 @@ Enable online sources with `JSA_LIVE_SEARCH=1` when starting the services, and e
 
 The [application workflow guide](docs/WORKFLOW.md) explains each step, its gates, and how saved work resumes after a correction or interruption.
 
+## User profiles
+
+Use **User profile** in the sidebar to switch searches. Open **Privacy & settings → Create user profile** to add one for yourself or a household member. Enter a name and an existing source document folder. Folders must be separate, with no parent/child overlap between profiles. Open **Documents** in the new profile to import records or index files.
+
+After updating an existing installation, restart both the API and worker. Startup applies the migration. `JSA_WORKSPACE` supplies the default profile's source folder when it is first registered; later runs use the saved profile folder.
+
+Existing records stay in **My profile**. Each additional profile starts with empty records and separate answers, applications, searches, model settings, generated files, and browser sessions. Switching profiles reloads the view and clears unsaved drafts. Other tabs and queued jobs retain their profile. **Data mode** under **Privacy & settings** selects real records or synthetic demonstration data within that profile. Real records are the default.
+
+Profiles share this installation's local access token. Anyone with that token can manage all profiles; profiles are not separate login accounts. The worker processes all profiles automatically. CLI operations accept `--profile <id>`, and external MCP servers select one with `JSA_PROFILE=<id>` while keeping `JSA_STATE` pointed at the installation's state directory. Profile IDs are available in the page URL and `GET /api/profiles`. The MCP `list_profiles` tool still lists JobSpy search presets.
+
+New profiles have disabled saved sending and tracker-write settings. Explicit deployment environment overrides still apply. Model evidence transfer must be enabled separately in each profile. [Profile storage and routing](docs/ARCHITECTURE.md#user-profile-isolation) describes the database migration and request boundary.
+
 ## Demonstration
 
-Choose **Fixture demonstration** in the UI:
+Open **Privacy & settings** and choose **Fixture demonstration** under **Data mode**:
 
 1. Load the demonstration, then open **Find roles** and search the fixture sources. The manifest shows partial LinkedIn results, an ignored remote filter, and a prior application duplicate.
 2. Choose **Verify & inspect fit** for Northstar Demo. Review its requirement matrix, compensation components, and Ohio evidence. Harbor Demo remains conditional despite its high numeric score because a central production-tenure requirement is unmet.
@@ -51,7 +63,7 @@ Choose **Fixture demonstration** in the UI:
 
 `.venv/bin/python scripts/demo_portal.py` demonstrates the employer-form adapter through the running UI, using only a synthetic employer and an offline model. It saves review and receipt screenshots under private state.
 
-For read-only inspection, choose **Existing job_search records**, import the tracker and confirmation records, and inspect **Profile & answers**. Full ingestion is available under **Documents**. File hashes, references, extraction warnings, conflicts, and private intake reports remain available for review.
+For read-only inspection, choose **Current profile records**, import the tracker and confirmation records, and inspect **Profile & answers**. Full ingestion is available under **Documents**. File hashes, references, extraction warnings, conflicts, and private intake reports remain available for review.
 
 ## Commands
 
@@ -108,7 +120,7 @@ Package preparation runs separate structured writing and claim-review tasks thro
 | Fit | Separate engineering and solutions rubrics, mandatory gaps, minima, Ohio and compensation caps, maximum-five shortlist function |
 | Requirement review | Confirm or deny central requirements with scoped notes; rerun fit scoring through the configured model |
 | Packages | HTML, DOCX, PDF, answer records, review page, evidence IDs, immutable submitted copies, actual-attachment tracking |
-| Workflow | Durable states, user questions, pause/resume, visible Greenhouse review, approval-bound Lever/Greenhouse senders, attempt checkpoint, receipt reconciliation |
+| Workflow | Durable states, user questions, pause/resume, visible Greenhouse review, approval-bound Lever/Greenhouse/Breezy senders, attempt checkpoint, receipt reconciliation |
 | Intervention inbox | Persistent notices, manual handoffs for uncertain required answers, acknowledgment without clearing blockers, scoped confirmations, automatic resumption |
 | Records | Read-only real imports, conflict resolution, fixture ODS updates, backups, atomic replacement, journals, notes/checklist/handoff, manual reports |
 | Privacy | Localhost services, token authentication, origin checks, isolated browser profiles, artifact path restrictions, no hosted transfer by default |
@@ -119,7 +131,7 @@ In **Fit assessment**, use **Confirm** or **Deny** for central requirements, add
 
 ## Limits
 
-Real employer submission is available through the existing final-review approval when sending is enabled. New installs default to disabled; [operations](docs/OPERATIONS.md#approval-driven-sending) explains the persistent setting. Real tracker writes can be enabled on **Metrics & tracker**, with a reviewed preview for each update. [Tracker controls](docs/TRACKER.md) describe backups and recovery. Lever and Greenhouse have fixture-tested executors with approval, request validation, receipts, and restart recovery. Greenhouse can fill its visible browser for local review while keeping files and answers off the employer's servers. Its live control structure was checked with fictitious data and outbound application traffic blocked; production submission acceptance has not been tested. Required education, additional demographic or consent controls, other Greenhouse storage regions, Workday account flows, CAPTCHA, and unrecognized controls still need review or a normal-browser handoff. [Employer form adapters](docs/EMPLOYER_FORMS.md) describe the coverage. The existing Firefox fill-only tool is preserved; this application does not claim universal ATS automation.
+Real employer submission is available through the existing final-review approval when sending is enabled. New installs default to disabled; [operations](docs/OPERATIONS.md#approval-driven-sending) explains the persistent setting. Real tracker writes can be enabled on **Metrics & tracker**, with a reviewed preview for each update. [Tracker controls](docs/TRACKER.md) describe backups and recovery. Lever, Greenhouse, and Breezy have fixture-tested executors with approval, request validation, receipts, and restart recovery. Greenhouse can fill its visible browser for local review while keeping files and answers off the employer's servers. Its live control structure was checked with fictitious data and outbound application traffic blocked; production submission acceptance has not been tested. Required education, additional demographic or consent controls, other Greenhouse storage regions, Workday account flows, CAPTCHA, and unrecognized controls still need review or a normal-browser handoff. [Employer form adapters](docs/EMPLOYER_FORMS.md) describe the coverage. The existing Firefox fill-only tool is preserved; this application does not claim universal ATS automation.
 
 Official verification requires an allowed employer host, an identifiable requisition, an open page, and an application link. Redirects and ambiguous pages need review. Search fixtures do not prove current real openings. Live JobSpy searches and read-only employer verification have been demonstrated; discovery alone does not establish that an opening is current.
 

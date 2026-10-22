@@ -3,12 +3,42 @@ import pytest
 from jobsearch.config import atomic_write, digest
 from jobsearch.db import js
 from jobsearch.fixtures import seed, assessment
-from jobsearch.hunt import Hunt, HuntRequest
+from jobsearch.hunt import Hunt, HuntRequest, TERMS
 from jobsearch.jobspy_client import JobSpyClient
 from jobsearch.llm.service import InferenceService
 from jobsearch.queue import Worker
 from jobsearch.workflow import Workflow, ApprovalInput
 from jobsearch.openings import OfficialOpenings
+from pydantic import ValidationError
+
+
+@pytest.mark.parametrize("role", ["", "   ", "\t\n", "x" * 301])
+def test_hunt_rejects_blank_or_overlong_roles(role):
+    with pytest.raises(ValidationError):
+        HuntRequest(role=role)
+
+
+@pytest.mark.parametrize("role", ['  data analyst C++ / C# "API"  ', None])
+async def test_hunt_role_reaches_mcp_search_and_worker_plan(db, role):
+    service = Hunt(db)
+    hunt = service.start(HuntRequest(candidate="fixture", track="solutions", role=role))
+    # A fresh coordinator reads the stored request, as it would after a restart.
+    await Hunt(db).tick({"input": {"hunt_id": hunt["id"]}})
+    search = db.one("SELECT * FROM jobs WHERE kind='search'")
+    terms = [role.strip()] if role else TERMS["solutions"]
+    assert search["input"]["terms"] == terms
+    assert search["input"]["track"] == "solutions"
+    await Hunt(db).tick({"input": {"hunt_id": hunt["id"]}})
+    assert db.one("SELECT count(*) n FROM jobs WHERE kind='search'")["n"] == 1
+
+    from jobsearch.search import SearchService
+
+    search_service = SearchService(db)
+    result = search_service.run(search, lambda cp: None, lambda: False)
+    manifest = result["manifest"]
+    assert len(manifest["queries"]) == len(terms) * 2
+    assert {q["query"] for q in manifest["queries"]} == set(terms)
+    assert {q["source"] for q in manifest["queries"]} == {"indeed", "linkedin"}
 
 
 async def test_mcp_search_request_is_idempotent_across_clients(db):

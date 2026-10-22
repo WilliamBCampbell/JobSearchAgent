@@ -17,9 +17,9 @@ from pypdf import PdfReader
 
 from ..config import digest
 from ..llm.runner import InferenceStopped
-from .content import employment_facts
+from .content import employment_facts, validate_cover_letter_text
 
-VERSION = "html-letter-v3"
+VERSION = "html-letter-v4"
 RESUME_CSS = """@page { size: Letter; margin: 0.42in 0.55in; }
 body { margin: 0; color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 9.6pt; line-height: 1.19; }
 h1, h2 { font-family: Arial, Helvetica, sans-serif; }
@@ -37,7 +37,8 @@ LETTER_CLOSING = (
     "I look forward to learning more about your team's needs and discussing "
     "how I could best contribute in this role."
 )
-TEMPLATE_HASH = digest([RESUME_CSS, LETTER_CSS, LETTER_CLOSING])
+LETTER_SUBJECT = '<p class="subject">{employer} | {role}</p>'
+TEMPLATE_HASH = digest([RESUME_CSS, LETTER_CSS, LETTER_SUBJECT, LETTER_CLOSING])
 
 
 def check_dependencies():
@@ -94,13 +95,23 @@ def document_html(kind, document, facts, profile, app):
             ]
     else:
         parts += [
-            f'<p class="subject">{esc(app["employer"])} | {esc(app["role"])}<br>Requisition {esc(app["requisition"])}</p>',
+            LETTER_SUBJECT.format(employer=esc(app["employer"]), role=esc(app["role"])),
             "<p>Dear Hiring Team,</p>",
         ]
         parts += [f"<p>{esc(p['text'])}</p>" for p in document["cover_letter"]]
         parts.append(f"<p>{esc(LETTER_CLOSING)}</p>")
         parts.append(f"<p>Sincerely,<br>{esc(profile['name'])}</p>")
-    return "\n".join(parts + ["</body></html>"])
+    result = "\n".join(parts + ["</body></html>"])
+    if not resume:
+        validate_cover_letter_html(result, app)
+    return result
+
+
+def validate_cover_letter_html(source, app):
+    body = BeautifulSoup(source, "html.parser").body
+    if body is None:
+        raise ValueError("Cover letter has no document body")
+    validate_cover_letter_text(body.get_text(" "), app)
 
 
 def command(args, cancelled, timeout=90):

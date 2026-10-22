@@ -155,7 +155,8 @@ async def test_narrative_editor_keeps_notes_and_portal_choice_separate(
         page.on("pageerror", lambda e: errors.append(str(e)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Intervention Demo", exact=True).click()
             notes = page.get_by_role(

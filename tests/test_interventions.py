@@ -279,7 +279,8 @@ async def test_inbox_opens_question_and_confirmation_resolves_notice(
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role(
                 "button", name="View notifications", exact=True
             ).click()
@@ -292,7 +293,8 @@ async def test_inbox_opens_question_and_confirmation_resolves_notice(
                 inbox.get_by_text("SEEN · STILL OPEN", exact=True)
             ).to_be_visible()
             await page.reload()
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role(
                 "button", name="View notifications", exact=True
             ).click()

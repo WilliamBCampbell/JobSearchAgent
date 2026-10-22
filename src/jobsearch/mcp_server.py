@@ -2,8 +2,7 @@
 
 from typing import Any
 from mcp.server import MCPServer
-from pydantic import BaseModel, Field
-from .config import Settings
+from .user_profiles import selected_settings
 from .db import DB
 from .search import SearchService, SearchRequest
 from .scoring import duplicate_groups
@@ -16,7 +15,7 @@ mcp = MCPServer(
 
 
 def service():
-    return SearchService(DB(Settings()))
+    return SearchService(DB(selected_settings()))
 
 
 @mcp.tool(structured_output=True)
@@ -60,7 +59,7 @@ def normalize_results(rows: list[dict], candidate: str = "fixture") -> dict[str,
     """Normalize cross-source discoveries and flag exact or ambiguous prior applications."""
     if candidate not in ("real", "fixture"):
         raise ValueError("Unknown candidate")
-    db = DB(Settings())
+    db = DB(selected_settings())
     return {
         "groups": duplicate_groups(
             rows, db.all("SELECT * FROM applications WHERE candidate=%s", (candidate,))

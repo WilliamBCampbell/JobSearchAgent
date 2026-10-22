@@ -1,8 +1,8 @@
 """Checkpointed search coordinator. Each tick yields so child jobs can run."""
 
 import asyncio
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Annotated, Literal
+from pydantic import BaseModel, Field, StringConstraints
 from .db import js, uid
 from .config import digest
 from .jobspy_client import JobSpyClient
@@ -30,6 +30,12 @@ TERMINAL = {"complete", "failed", "cancelled", "unresolved"}
 
 class HuntRequest(BaseModel):
     candidate: Literal["real", "fixture"] = "real"
+    role: (
+        Annotated[
+            str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)
+        ]
+        | None
+    ) = None
     track: Literal["software", "applied_ai", "solutions"] = "software"
     results_per_query: int = Field(default=20, ge=5, le=50)
     evaluation_limit: int = Field(default=12, ge=1, le=30)
@@ -193,7 +199,7 @@ class Hunt:
                         "profile": "solutions"
                         if req.track == "solutions"
                         else "software_dev",
-                        "terms": TERMS[req.track],
+                        "terms": [req.role] if req.role else TERMS[req.track],
                         "results": req.results_per_query,
                     }
                 },

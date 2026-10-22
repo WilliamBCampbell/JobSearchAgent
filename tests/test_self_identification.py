@@ -307,7 +307,11 @@ async def test_survey_ui_refresh_global_choices_and_separate_question_controls(
     spec = survey()
     spec.unsupported = [LEGACY_BLOCKER]
     flow.update_payload(
-        aid, {"form_plan": {"spec": spec.model_dump(), "fingerprint": spec.fingerprint}}
+        aid,
+        {
+            "package": {"files": []},
+            "form_plan": {"spec": spec.model_dump(), "fingerprint": spec.fingerprint},
+        },
     )
     flow.transition(aid, "filling")
     flow.transition(aid, "manual_handoff")
@@ -321,7 +325,10 @@ async def test_survey_ui_refresh_global_choices_and_separate_question_controls(
 
         async def open_app():
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Example Greenhouse", exact=True).click()
 
@@ -360,7 +367,10 @@ async def test_survey_ui_refresh_global_choices_and_separate_question_controls(
                 fact = db.one("SELECT * FROM facts WHERE key=%s AND active", (f.key,))
                 assert fact["scope"] == "global" and fact["value"] == value
             await page.reload()
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Example Greenhouse", exact=True).click()
             assert not errors
@@ -372,14 +382,17 @@ async def test_survey_ui_refresh_global_choices_and_separate_question_controls(
 
 def test_handoff_notice_names_fit_or_attempt_blocker():
     from jobsearch.notifications import Notifications
+    from .test_scoring_search import official
 
     app = {
         "id": "synthetic",
         "state": "manual_handoff",
         "imported": False,
         "paused": False,
+        "official": official(),
         "payload": {
-            "form_plan": {"spec": {"adapter": "greenhouse", "unsupported": []}}
+            "package": {"files": []},
+            "form_plan": {"spec": {"adapter": "greenhouse", "unsupported": []}},
         },
         "score": {
             "scores": {"technical": 30},
@@ -389,7 +402,9 @@ def test_handoff_notice_names_fit_or_attempt_blocker():
         },
     }
     issues = Notifications.issues(app, [], [], [])
-    assert any(i[1]["title"] == "Review fit before sending" for i in issues)
+    assert any(
+        i[1]["title"] == "Resolve the fit blockers before continuing" for i in issues
+    )
     app["has_attempt"] = True
     issues = Notifications.issues(app, [], [], [])
     assert any(i[1]["title"] == "Check the previous submission outcome" for i in issues)

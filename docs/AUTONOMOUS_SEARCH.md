@@ -1,8 +1,33 @@
 # Autonomous search and preparation
 
-Open **Find roles** and choose **Find my best matches**. The app searches real Indeed and LinkedIn listings through the local JobSpy MCP server. The worker then checks official openings, compares prior applications, extracts requirements, evaluates fit through Codex, ranks qualifying roles, and prepares up to five packages. The screen survives reloads and shows saved progress, source warnings, exclusions, and package previews.
+Open **Find roles**, enter a role or keywords, and choose **Find my best matches** (or press Enter). The app searches real Indeed and LinkedIn listings through the local JobSpy MCP server. The worker then checks official openings, compares prior applications, extracts requirements, evaluates fit through Codex, ranks qualifying roles, and prepares up to five packages. The screen survives reloads and shows saved progress, source warnings, exclusions, and package previews.
 
-The default run examines up to 60 discovery groups and evaluates up to 12 verified openings. These bounds and the primary limit are typed fields in `HuntRequest`. Software engineering, applied AI, and solutions engineering use separate queries; solutions engineering retains its separate rubric. Results beyond the configured bounds remain in the saved search results. No batch is padded to reach five.
+The default run examines up to 60 discovery groups and evaluates up to 12 verified openings. These bounds and the primary limit are typed fields in `HuntRequest`. The role text becomes one search term per board, with surrounding whitespace removed and punctuation preserved. Blank input is rejected; the limit is 300 characters. The saved request, progress display, and search history retain that role. Older requests without a role continue to use their track's preset queries.
+
+**Evaluation settings** selects the fit assessment track independently of the search text. Software engineering, applied AI, and solutions engineering remain the available assessment tracks; solutions engineering retains its separate rubric. Custom roles do not create new rubrics or remove the existing fit gates. Results beyond the configured bounds remain in the saved search results. No batch is padded to reach five.
+
+## Additional JobSpy search controls
+
+The app runs its own `jobspy-mcp` server in `src/jobsearch/mcp_server.py`. Its `start_search` tool accepts `SearchRequest` from `src/jobsearch/search.py`. The separate [upstream MCP server](https://github.com/speedyapply/JobSpy/blob/main/mcp/README.md) exposes `search_jobs` with JobSpy search options. The table below describes the app's local integration, checked against the local JobSpy checkout at `1fffbcd4c1d822740157459fe527a916d3ce7a43` and the [upstream parameter reference](https://github.com/speedyapply/JobSpy#parameters-for-scrape_jobs) on October 21, 2026.
+
+| Possible user control | Parameter | Local integration and limits |
+| --- | --- | --- |
+| Job boards | `sites` / JobSpy `site_name` | MCP already accepts Indeed, LinkedIn, Glassdoor, ZipRecruiter, Bayt, Naukri, BDJobs, and HelloWork. The hunt currently uses Indeed and LinkedIn. |
+| Posting age | `hours` / `hours_old` | MCP accepts 1 to 8,760 hours; default 168. Glassdoor rounds to whole days. |
+| Remote only | `remote` / `is_remote` | MCP already accepts this; default true. The local LinkedIn scraper ignores it. False removes the remote-only request; it does not mean onsite only. |
+| Results per query per board | `results` / `results_wanted` | MCP accepts 1 to 100, default 15. Hunts use `results_per_query`, bounded to 5 to 50, default 20. This controls retrieval volume. |
+| Multiple role queries | `terms` | MCP accepts up to six terms. The new role field submits one term. |
+| City, state, or region | `location` | JobSpy and the local runner support it. `SearchRequest` needs a field and forwarding; the service currently inherits the saved profile's location. |
+| Search radius | `distance` | JobSpy accepts miles, default 50. Needs MCP and adapter wiring. Board support varies. |
+| Country | `country_indeed` | JobSpy supports country selection for Indeed and Glassdoor. Needs MCP and adapter wiring; other boards use location or have regional coverage. |
+| Employment type | `job_type` | JobSpy supports types such as full-time, part-time, contract, temporary, and internship. Needs MCP and adapter wiring. The local LinkedIn scraper ignores it; other boards support different subsets. |
+| Easy Apply | `easy_apply` | JobSpy supports a filter for applications hosted on a job board. Needs MCP and adapter wiring. It does not grant permission to apply. |
+| Specific LinkedIn employers | `linkedin_company_ids` | JobSpy accepts numeric company IDs. Needs MCP and adapter wiring, plus a way for users to supply IDs or resolve employer names. |
+| More search results | `offset` | JobSpy accepts a source search offset. Needs MCP and adapter wiring. Existing `search_results(offset, limit)` only pages through already saved results. |
+
+Start with location, posting age, board selection, and a remote-only control that shows which sources honor it. Add employment type and radius with source-specific validation. The existing Ohio eligibility, compensation, and fit policies would still govern recommendations, even when a search uses a different location or work arrangement.
+
+Salary range, seniority, and separate hybrid/onsite choices are not dedicated filters in the inspected `scrape_jobs` signature. Those would require query text or filtering returned listings, with missing values handled explicitly. `enforce_annual_salary` converts returned pay figures; it does not filter by pay. Description fetching and formatting, proxies, certificates, user-agent settings, and the MCP timeout are retrieval or operational settings. Google is excluded from the local MCP site list and is documented upstream as unavailable.
 
 ## Checkpoints and cancellation
 

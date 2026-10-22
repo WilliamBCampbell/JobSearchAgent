@@ -1,3 +1,4 @@
+import { profileUrl } from "./UserProfiles";
 import React, { useEffect, useState } from "react";
 type Row = Record<string, any>;
 
@@ -13,10 +14,17 @@ export function SearchAgent({
   chooseReal: () => void;
 }) {
   const [track, setTrack] = useState("software");
+  const [role, setRole] = useState("");
   const [hunt, setHunt] = useState<Row | null>(null);
   const [history, setHistory] = useState<Row[]>([]);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
+  useEffect(() => {
+    if (hunt) {
+      setRole(hunt.request.role || "");
+      setTrack(hunt.request.track);
+    }
+  }, [hunt?.id]);
   useEffect(() => {
     let alive = true;
     api("/hunts?candidate=real")
@@ -60,38 +68,66 @@ export function SearchAgent({
           prior applications, evaluates the requirements, and prepares up to
           five qualifying roles for review.
         </p>
-        <div className="inline-form">
+        <form
+          className="inline-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!role.trim() || starting || (hunt && !done)) return;
+            run(async () => {
+              setStarting(true);
+              try {
+                const h = await api("/hunts", {
+                  candidate: "real",
+                  role: role.trim(),
+                  track,
+                });
+                chooseReal();
+                setHunt(h);
+                setError("");
+              } finally {
+                setStarting(false);
+              }
+            }, "The agent is searching online. You can leave this screen while it works.");
+          }}
+        >
           <label>
-            Search track
+            Role or keywords
+            <input
+              type="text"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              placeholder="e.g. data analyst or technical account manager"
+              maxLength={300}
+              required
+              disabled={starting || !!(hunt && !done)}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={!role.trim() || starting || !!(hunt && !done)}
+          >
+            Find my best matches
+          </button>
+        </form>
+        <details>
+          <summary>Evaluation settings</summary>
+          <p>
+            Search any role or keywords. Fit scoring uses one of the existing
+            engineering rubrics; choose the closest match for your search.
+          </p>
+          <label>
+            Fit assessment track
             <select
-              aria-label="Agent search track"
               value={track}
               onChange={(e) => setTrack(e.target.value)}
+              disabled={starting || !!(hunt && !done)}
             >
               <option value="software">Software engineering</option>
               <option value="applied_ai">Applied AI engineering</option>
               <option value="solutions">Solutions engineering</option>
             </select>
           </label>
-          <button
-            disabled={starting || !!(hunt && !done)}
-            onClick={() =>
-              run(async () => {
-                setStarting(true);
-                try {
-                  const h = await api("/hunts", { candidate: "real", track });
-                  chooseReal();
-                  setHunt(h);
-                  setError("");
-                } finally {
-                  setStarting(false);
-                }
-              }, "The agent is searching online. You can leave this screen while it works.")
-            }
-          >
-            Find my best matches
-          </button>
-        </div>
+        </details>
         <p>
           Each run checks up to 60 discoveries and evaluates up to 12 verified
           openings. Codex receives selected career evidence and the posting.
@@ -111,6 +147,7 @@ export function SearchAgent({
               ? "Search paused"
               : stage || "Starting search"}
           </h2>
+          {hunt.request.role && <p>Searching for: {hunt.request.role}</p>}
           <p>
             {hunt.checkpoint?.discovered ?? 0} discoveries ·{" "}
             {hunt.leads.filter((l: Row) => l.application_id).length} verified
@@ -234,7 +271,7 @@ export function SearchAgent({
               .map((f: Row) => (
                 <a
                   key={f.id}
-                  href={"/api/artifacts/" + f.id + "?preview=true"}
+                  href={profileUrl("/api/artifacts/" + f.id + "?preview=true")}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -275,17 +312,24 @@ export function SearchAgent({
                     <td>
                       {l.status.replaceAll("_", " ")}
                       {l.score?.total !== undefined && (
-                        <small>Current fit: {l.score.total}/100 · {l.score.band}</small>
+                        <small>
+                          Current fit: {l.score.total}/100 · {l.score.band}
+                        </small>
                       )}
                     </td>
                     <td>
                       {l.reason || ""}
                       {l.application_id && l.score?.scores && (
                         <div className="actions">
-                          <button className="secondary" onClick={() => {
-                            chooseReal();
-                            openApplication(l.application_id);
-                          }}>Review fit</button>
+                          <button
+                            className="secondary"
+                            onClick={() => {
+                              chooseReal();
+                              openApplication(l.application_id);
+                            }}
+                          >
+                            Review fit
+                          </button>
                         </div>
                       )}
                     </td>
@@ -308,8 +352,8 @@ export function SearchAgent({
             >
               {history.map((h) => (
                 <option key={h.id} value={h.id}>
-                  {new Date(h.created_at).toLocaleString()} · {h.request.track}{" "}
-                  · {h.status}
+                  {new Date(h.created_at).toLocaleString()} ·{" "}
+                  {h.request.role || h.request.track} · {h.status}
                 </option>
               ))}
             </select>

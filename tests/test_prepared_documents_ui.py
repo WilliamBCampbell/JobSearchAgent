@@ -45,7 +45,8 @@ async def test_latest_prepared_documents_hide_duplicate_versions(db, has_package
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Document Versions Demo", exact=True).click()
             panel = page.locator("section.panel").filter(

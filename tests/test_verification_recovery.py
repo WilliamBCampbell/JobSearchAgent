@@ -26,6 +26,7 @@ def test_verification_notifications_do_not_claim_nothing_was_sent(confirmed, tit
             "id": "fixture",
             "state": "unresolved",
             "imported": False,
+            "payload": {},
             "submission_recovery": {
                 "kind": "verification",
                 "can_retry": confirmed,
@@ -87,6 +88,29 @@ def test_negative_confirmation_does_not_send_and_retry_preserves_history(db):
     assert not flow.submission_recovery(aid)["can_retry"]
     with pytest.raises(ValueError):
         flow.confirm_not_submitted(aid, request)
+
+
+def test_legacy_opening_timeout_does_not_erase_confirmed_verification_outcome(db):
+    flow, aid, attempt, _ = verification_stopped(db)
+    flow.confirm_not_submitted(aid, decision(flow, aid))
+    original = db.one("SELECT result FROM attempts WHERE id=%s", (attempt,))["result"]
+    db.audit(
+        "greenhouse.attempt_finished",
+        aid,
+        {
+            "attempt_id": attempt,
+            "run_id": original["run_id"],
+            "stage": "opening_form",
+            "post_observed": False,
+            "post_status": None,
+            "receipt_status": None,
+        },
+    )
+    assert flow.submission_recovery(aid)["can_retry"]
+    assert (
+        db.one("SELECT result FROM attempts WHERE id=%s", (attempt,))["result"]
+        == original
+    )
 
 
 @pytest.mark.parametrize(
@@ -177,7 +201,10 @@ async def test_ui_negative_outcome_then_separate_retry(db, fixture_server):
         try:
             page = await browser.new_page()
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Northstar Demo", exact=True).click()
             await expect(

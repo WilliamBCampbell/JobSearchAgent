@@ -22,7 +22,7 @@ class FormAnswers:
         self.db = db
         self.service = InferenceService(db)
 
-    def context_question(self, aid, qid):
+    def context_question(self, aid, qid, answer=False):
         from .workflow import Workflow
         from .form_policy import narrative_choice_mismatch
 
@@ -58,13 +58,82 @@ class FormAnswers:
         )
         if (
             not field
-            or not narrative_choice_mismatch(field)
+            or (
+                not narrative_choice_mismatch(field)
+                if not answer
+                else field["type"] not in ("text", "textarea")
+                or bool(field.get("options"))
+                or requires_explicit_answer(field)
+                or field.get("purpose", "ordinary") != "ordinary"
+            )
             or (q["answer_fact"] and not q["needs_review"])
         ):
             raise ValueError(
-                "Choose an unanswered narrative question with conflicting employer choices"
+                "Choose an unanswered text question that does not require a personal commitment"
+                if answer
+                else "Choose an unanswered narrative question with conflicting employer choices"
             )
         return app, q, field
+
+    def draft_answer(
+        self,
+        aid,
+        qid,
+        job_id=None,
+        progress=lambda _: None,
+        cancelled=lambda: False,
+        source_urls=(),
+    ):
+        from .db import js
+        from .employer_research import EmployerResearch
+
+        app, question, field = self.context_question(aid, qid, answer=True)
+        if source_urls:
+            EmployerResearch(self.db).capture(aid, source_urls)
+            app, question, field = self.context_question(aid, qid, answer=True)
+        result = self.prepare(app, [field], job_id, progress, cancelled)[field["key"]]
+        if cancelled():
+            raise InferenceStopped("Answer drafting cancelled")
+        current_app, current, current_field = self.context_question(
+            aid, qid, answer=True
+        )
+        if current_field != field or any(
+            current[k] != question[k] for k in ("answer_fact", "needs_review")
+        ):
+            raise ValueError(
+                "The question changed while drafting; review the current question"
+            )
+        reason = result.get("reason", {})
+        suggestion = (
+            result
+            if result.get("source") == "form_evidence"
+            else reason.get("suggestion")
+        )
+        if suggestion and not self.valid(current_app, field, suggestion, draft=True):
+            raise ValueError(
+                "The evidence changed while drafting; request a new suggestion"
+            )
+        self.db.execute(
+            "UPDATE questions SET reason=(reason - 'suggestion') || %s WHERE id=%s",
+            (
+                js(
+                    reason
+                    | {
+                        "code": "draft_needs_review"
+                        if suggestion
+                        else reason.get("code", "evidence_needed"),
+                        "message": "AI suggestion. Review and edit it before confirming your answer."
+                        if suggestion
+                        else reason.get(
+                            "message", "No supported suggestion is available."
+                        ),
+                        **({"suggestion": suggestion} if suggestion else {}),
+                    }
+                ),
+                qid,
+            ),
+        )
+        return {"question_id": qid, "draft_available": bool(suggestion)}
 
     def draft_context(
         self, aid, qid, job_id=None, progress=lambda _: None, cancelled=lambda: False
@@ -253,11 +322,6 @@ class FormAnswers:
                     code="narrative_choice_mismatch",
                     message="The employer asks for a narrative but only offers choices. Save your examples as application notes and explicitly choose the option the employer will receive. The agent cannot infer what Yes or No means for this prompt.",
                 )
-            elif personal_question(field) and not packet["personal_context_ids"]:
-                reason.update(
-                    code="personal_context_needed",
-                    message="Your records describe your experience, but do not establish what personally interests or motivates you about this role. Tell us what appeals to you; the agent can help connect that with what you would bring.",
-                )
             elif requires_explicit_answer(field):
                 reason.update(
                     code="personal_commitment_needed",
@@ -337,13 +401,22 @@ class FormAnswers:
                     )
                     continue
                 # Quantitative claims need support in the cited career facts.
+                # Employer product names such as B2B or 3E are not quantities.
                 numbers = re.findall(r"\b\d+(?:\.\d+)?\b", str(proposal["value"]))
                 cited = json.dumps([facts[i]["value"] for i in proposal["fact_ids"]])
+                cited += json.dumps(
+                    [
+                        s["text"]
+                        for s in packet["sources"]
+                        if s["id"] in proposal["source_refs"]
+                        and s["kind"] in ("employer_source", "employer_research")
+                    ]
+                )
                 if any(
                     n not in re.findall(r"\b\d+(?:\.\d+)?\b", cited) for n in numbers
                 ):
                     results[key]["reason"]["message"] = (
-                        "The proposed answer included a number unsupported by the cited career records."
+                        "The proposed answer included a number unsupported by its cited evidence."
                     )
                     continue
                 answer = {
@@ -379,6 +452,23 @@ class FormAnswers:
                         code="draft_needs_review",
                         message="Review this draft against your own perspective before confirming it.",
                         suggestion=answer,
+                        context=[
+                            {
+                                "fact_id": i,
+                                "text": str(facts[i]["value"]),
+                                "source": "Confirmed career record",
+                            }
+                            for i in proposal["fact_ids"]
+                        ],
+                        employer_sources=[
+                            {
+                                "id": s["id"],
+                                "url": s.get("url"),
+                                "title": s.get("title") or "Employer posting",
+                            }
+                            for s in packet["sources"]
+                            if s["id"] in proposal["source_refs"]
+                        ],
                     )
                 else:
                     results[key] = answer

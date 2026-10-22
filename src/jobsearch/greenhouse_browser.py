@@ -216,10 +216,11 @@ class GreenhouseBrowser:
                 headers = {
                     k: v
                     for k, v in request.headers.items()
-                    if k.lower() not in ("authorization", "cookie", "x-jsa-token")
+                    if k.lower()
+                    not in ("authorization", "cookie", "x-jsa-token", "x-jsa-profile")
                 }
                 if app["candidate"] == "fixture":
-                    headers["X-JSA-Token"] = self.db.settings.token()
+                    headers.update(self.db.settings.local_headers())
                 await route.continue_(headers=headers)
             else:
                 gate["blocked"] += 1
@@ -238,10 +239,16 @@ class GreenhouseBrowser:
         }
         if transport:
             page.on("response", transport.response)
-        await page.goto(spec.url, wait_until="networkidle", timeout=30000)
-        # Keep loading public resources while validating the controls. Hydration
-        # can request dropdown translations after the first network-idle event.
-        # fill_values closes this read boundary before entering candidate data.
+            page.on("console", transport.browser_console)
+        await page.goto(spec.url, wait_until="domcontentloaded", timeout=30000)
+        await page.locator("#application-form").wait_for(state="visible", timeout=30000)
+        await (
+            page.locator("#application-form")
+            .get_by_role("button", name=spec.submit_label, exact=True)
+            .wait_for(state="visible", timeout=30000)
+        )
+        # Background requests need not finish for the form to be usable.
+        # Control validation still checks hydration, labels, and choices.
         return page, gate
 
     def control(self, page, field):
@@ -275,6 +282,28 @@ class GreenhouseBrowser:
             c = self.control(page, f)
             if await c.count() != 1:
                 raise ValueError("The employer changed this control: " + f.label)
+            if f.type == "checkbox":
+                group = await c.evaluate("""e=>({
+                    tag:e.tagName,
+                    label:(e.querySelector('legend')?.textContent || '').replace(/\\*/g,'').trim(),
+                    required:e.getAttribute('aria-required')==='true',
+                    options:[...e.querySelectorAll('input[type=checkbox]')].map(i=>({
+                        id:i.id,name:i.name,label:[...i.labels].map(l=>l.textContent).join('').trim()
+                    }))
+                })""")
+                if (
+                    group["tag"] != "FIELDSET"
+                    or group["label"] != f.label.strip()
+                    or group["required"] != f.required
+                ):
+                    raise ValueError("The employer changed this question: " + f.label)
+                if (
+                    [o["label"] for o in group["options"]] != f.options
+                    or any(o["name"] != f.name or not o["id"] for o in group["options"])
+                    or len(set(f.options)) != len(f.options)
+                ):
+                    raise ValueError("The employer changed the choices: " + f.label)
+                continue
             info = await c.evaluate("""e=>({
                 label:(document.querySelector('label[for="'+e.id+'"]')?.textContent || '').replace(/\\*/g,'').trim(),
                 required:e.required || e.getAttribute('aria-required')==='true',
@@ -285,7 +314,7 @@ class GreenhouseBrowser:
                 if info["type"] != "file":
                     raise ValueError("The employer changed the upload control")
                 continue  # file requiredness is supplied by the public questions API
-            if info["label"] != f.label or info["required"] != f.required:
+            if info["label"] != f.label.strip() or info["required"] != f.required:
                 raise ValueError("The employer changed this question: " + f.label)
             if f.type == "select":
                 if info["tag"] == "SELECT":
@@ -314,6 +343,13 @@ class GreenhouseBrowser:
         ids = {f.name for f in spec.fields}
         ids.update(f.name + "_1" for f in spec.fields if f.binding == "data_compliance")
         ids.update(f.name + "-freeform" for f in spec.fields if f.free_form_options)
+        for f in spec.fields:
+            if f.purpose == "ordinary" and f.type == "checkbox":
+                ids.update(
+                    await self.control(page, f)
+                    .locator("input[type=checkbox]")
+                    .evaluate_all("els=>els.map(e=>e.id)")
+                )
         if any(f.binding == "eeoc" and f.name == "race" for f in spec.fields):
             ids.add("hispanic_ethnicity")
         required = await form.locator("input,textarea,select").evaluate_all("""els=>els.filter(e=>
@@ -338,6 +374,10 @@ class GreenhouseBrowser:
             await page.get_by_role("option", name=value, exact=True).click()
 
     async def value(self, control, field):
+        if field.type == "checkbox":
+            return await control.locator("input[type=checkbox]:checked").evaluate_all(
+                "els=>els.map(e=>[...e.labels].map(l=>l.textContent).join('').trim())"
+            )
         if (
             field.type == "select"
             and await control.evaluate("e=>e.tagName") == "SELECT"
@@ -350,6 +390,12 @@ class GreenhouseBrowser:
         return await control.input_value()
 
     async def fill_values(self, aid, page, spec, review, attempt_id=None):
+        limits = await self.text_limit_violations(page, spec, review)
+        if limits:
+            field, limit, length = limits[0]
+            raise ValueError(
+                f"The employer allows at most {limit} characters for {field.label.strip()} Your saved answer has {length}. Shorten it and confirm the revised answer."
+            )
         self.sessions[aid]["gate"]["phase"] = "fill"
         revision = self.flow.get(aid)["revision"]
         for f in spec.fields:
@@ -406,6 +452,16 @@ class GreenhouseBrowser:
             if f.purpose != "ordinary":
                 await greenhouse_choices.fill(self, page, f, answer["value"])
                 continue
+            if f.type == "checkbox":
+                from .forms import valid_value
+
+                if not valid_value(f, answer["value"]):
+                    raise ValueError("Confirm the checkbox answers before filling")
+                for option in f.options:
+                    await control.get_by_role(
+                        "checkbox", name=option, exact=True
+                    ).set_checked(option in answer["value"])
+                continue
             value = str(answer["value"])
             if f.type == "select":
                 await self.select(page, control, value)
@@ -413,8 +469,26 @@ class GreenhouseBrowser:
                 await control.fill(value)
         await page.locator("#application-form").click(position={"x": 1, "y": 1})
 
+    async def text_limit_violations(self, page, spec, review):
+        violations = []
+        for field in spec.fields:
+            if field.type not in ("text", "email", "tel", "url", "textarea"):
+                continue
+            value = str(
+                review["payload"]["answers"].get(field.key, {}).get("value", "")
+            )
+            limit = await self.control(page, field).evaluate("e=>e.maxLength ?? -1")
+            # HTML maxlength counts UTF-16 code units, including surrogate pairs.
+            length = len(value.encode("utf-16-le")) // 2
+            if limit >= 0 and length > limit:
+                violations.append((field, limit, length))
+        return violations
+
     async def values_match(self, page, spec, review):
+        session = next(s for s in self.sessions.values() if s["page"] is page)
         for f in spec.fields:
+            # Report the control, never the candidate's answer, when review stops.
+            session["mismatch"] = f.label.strip()
             if f.purpose != "ordinary":
                 expected = review["payload"]["answers"].get(f.key, {}).get("value")
                 actual = await greenhouse_choices.read(self, page, f)
@@ -428,7 +502,6 @@ class GreenhouseBrowser:
                     for a in review["payload"]["attachments"]
                     if a["kind"] == f.name + ".pdf"
                 ]
-                session = next(s for s in self.sessions.values() if s["page"] is page)
                 handle = (
                     await control.element_handle()
                     if await control.count()
@@ -450,6 +523,13 @@ class GreenhouseBrowser:
                     ):
                         return False
             else:
+                if f.type == "checkbox":
+                    expected = (
+                        review["payload"]["answers"].get(f.key, {}).get("value", [])
+                    )
+                    if sorted(await self.value(control, f)) != sorted(expected):
+                        return False
+                    continue
                 expected = str(
                     review["payload"]["answers"].get(f.key, {}).get("value", "")
                 )
@@ -462,6 +542,7 @@ class GreenhouseBrowser:
                     )
                 if actual != expected:
                     return False
+        session.pop("mismatch", None)
         return True
 
     async def stage(self, aid):
@@ -477,6 +558,27 @@ class GreenhouseBrowser:
             if await self.challenge(page):
                 raise InterruptedError("Employer verification requires user action")
             await self.validate_dom(page, spec)
+            limits = await self.text_limit_violations(page, spec, review)
+            if limits:
+                for field, limit, length in limits:
+                    self.flow.ask(
+                        aid,
+                        field.key,
+                        field.label,
+                        {
+                            "reason": {
+                                "code": "answer_too_long",
+                                "max_length": limit,
+                                "message": f"The employer allows at most {limit} characters. Your saved answer has {length}. Shorten it and confirm the revised answer. The original answer remains saved.",
+                            }
+                        },
+                    )
+                self.flow.require_answers(aid)
+                return {
+                    "state": "missing_answers",
+                    "filled": False,
+                    "message": "Shorten the answers that exceed the employer's character limits, then confirm them.",
+                }
             await page.evaluate("""() => {
                 const banner=document.createElement('div');
                 banner.id='jsa-browser-status'; banner.setAttribute('role','status');
@@ -488,7 +590,8 @@ class GreenhouseBrowser:
             self.active(aid, review["hash"])
             if not await self.values_match(page, spec, review):
                 raise ValueError(
-                    "The filled form differs from the confirmed answers or files"
+                    "The filled form differs from the confirmed answers or files: "
+                    + self.sessions[aid]["mismatch"]
                 )
             gate["phase"] = "hold"
             await page.locator("#first_name").scroll_into_view_if_needed()
@@ -601,13 +704,17 @@ class GreenhouseBrowser:
         }
         transport = GreenhouseTransport(self.db, app, spec, review, options)
         transport.check()
-        attempt = retry_id
+        attempt = None
         gate = None
         try:
             page, gate = await self.session(app, spec, transport)
             if await self.challenge(page):
                 raise InterruptedError("Employer verification needs your attention")
             await self.validate_dom(page, spec)
+            if await self.text_limit_violations(page, spec, review):
+                raise ValueError(
+                    "A saved answer exceeds the employer's character limit. Return to browser review and shorten it before approving again."
+                )
             transport.progress("checking_upload")
             if not transport.metadata:
                 raise ValueError("The employer upload metadata could not be verified")
@@ -634,11 +741,30 @@ class GreenhouseBrowser:
                 if transport.error and not transport.posted:
                     raise ValueError(transport.error)
                 if (
-                    transport.verification_pending
-                    or transport.post_status == 428
-                    or await self.challenge(page)
+                    transport.post_status == 428
+                    and not transport.response_ready.is_set()
                 ):
+                    try:
+                        await asyncio.wait_for(
+                            transport.response_ready.wait(), timeout=5
+                        )
+                    except TimeoutError:
+                        raise InterruptedError(
+                            "Employer verification response is still pending"
+                        ) from None
+                if transport.verification_pending or await self.challenge(page):
                     raise InterruptedError("Employer verification needs your attention")
+                if transport.post_status == 428:
+                    self.flow.unresolved(
+                        aid,
+                        "Greenhouse returned HTTP 428 without a usable verification step. "
+                        "No receipt is confirmed. Resolve the outcome before retrying.",
+                    )
+                    return {
+                        "state": "unresolved",
+                        "attempt_id": attempt,
+                        "message": "Greenhouse blocked verification without offering a code or challenge. Resolve the submission outcome before retrying.",
+                    }
                 if (
                     transport.posted
                     and self.flow.get(aid)["state"] == "submission_attempt"
@@ -699,6 +825,8 @@ class GreenhouseBrowser:
                     aid,
                     "Browser work stopped after the attempt checkpoint. Reconcile the employer outcome before retrying.",
                 )
+            elif retry_id:
+                self.flow.unresolved(aid, message)
             else:
                 self.flow.update_payload(aid, {"browser_hash": None})
             raise ValueError(message) from None

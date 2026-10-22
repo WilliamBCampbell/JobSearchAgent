@@ -1,6 +1,6 @@
 # Application steps and recovery
 
-The application page shows one current step and one main action. Completed work stays available in collapsed sections. If a gate needs attention again, later completed work is labeled **Saved**. A fit update does not regenerate documents or erase answers.
+The application page shows one current step and one main action. Completed work stays available in collapsed sections. Sections needed for the current step open automatically. Moving to another step folds the previous sections; their summaries remain clickable so the user can revisit them. Manual opening and closing persist through background refreshes until the workflow changes step or the user opens another application. If a gate needs attention again, later completed work is labeled **Saved**. A fit update does not regenerate documents or erase answers.
 
 | Step | What completes it | Next action |
 | --- | --- | --- |

@@ -91,7 +91,7 @@ def test_document_evidence_excludes_private_answers_and_detects_conflicts(db):
 def test_package_renders_from_html_and_reuses_immutable_versions(db, writing_skill):
     app, _, _ = packet_and_draft(db)
     result = Packages(db).prepare(app)
-    assert result["renderer"] == "html-letter-v3"
+    assert result["renderer"] == "html-letter-v4"
     assert len(result["files"]) == 6 and len(result["previews"]) == 2
     for kind in ("resume", "cover_letter"):
         pdf = next(f for f in result["files"] if f["kind"] == kind + ".pdf")
@@ -108,6 +108,25 @@ def test_package_renders_from_html_and_reuses_immutable_versions(db, writing_ski
         assert round(doc.sections[0].page_height.inches) == 11
         assert result["checks"][kind]["text_matches_html"]
         assert result["checks"][kind]["visual_review"] == "pending"
+        if kind == "cover_letter":
+            from bs4 import BeautifulSoup
+
+            source = Path(
+                next(
+                    f["path"]
+                    for f in result["files"]
+                    if f["kind"] == "cover_letter.html"
+                )
+            )
+            texts = [
+                BeautifulSoup(source.read_text(), "html.parser").get_text(" "),
+                " ".join(paragraph.text for paragraph in doc.paragraphs),
+                reader.pages[0].extract_text(),
+            ]
+            for text in texts:
+                assert "requisition" not in text.lower()
+                assert app["requisition"] not in text
+                assert app["employer"] in text and app["role"] in text
     before = {f["path"]: file_hash(Path(f["path"])) for f in result["files"]}
     again = Packages(db).prepare(app)
     assert again["version"] == result["version"]
@@ -189,3 +208,52 @@ def test_confirmed_training_import_retains_provenance_and_is_not_a_degree(db):
     draft["education"] = []
     with pytest.raises(ValueError, match="omitted confirmed education"):
         validate_document(draft, packet)
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        "Requisition R-12345",
+        "REQ #12345",
+        "Job ID: 12345",
+        "Posting ID 12345",
+        "Application ID 12345",
+        "source_refs: posting",
+        "aabbcc112233",
+        "61d87d7a-c9de-4c31-928a-fbbfe6c06018",
+    ],
+)
+def test_cover_letter_rejects_tracking_metadata_in_draft_and_rendering(db, leak):
+    app, packet, draft = packet_and_draft(db)
+    app = app | {
+        "requisition": "aabbcc112233",
+        "id": "61d87d7a-c9de-4c31-928a-fbbfe6c06018",
+    }
+    packet["application"].update({k: app[k] for k in ("id", "requisition")})
+    draft["cover_letter"][0]["text"] += " " + leak
+    with pytest.raises(ValueError, match="tracking metadata"):
+        validate_document(draft, packet)
+    with pytest.raises(ValueError, match="tracking metadata"):
+        document_html(
+            "cover_letter",
+            draft,
+            packet["facts"],
+            {"name": "Alex Example", "contacts": "alex@example.invalid"},
+            app,
+        )
+
+
+def test_template_metadata_cannot_bypass_publication_checks(db, monkeypatch):
+    app, _, _ = packet_and_draft(db)
+    original = document_html
+
+    def regressed_template(kind, document, facts, profile, application):
+        result = original(kind, document, facts, profile, application)
+        if kind == "cover_letter":
+            result = result.replace("</body>", "<p>Requisition R-12345</p></body>")
+        return result
+
+    monkeypatch.setattr("jobsearch.packages.document_html", regressed_template)
+    with pytest.raises(ValueError, match="tracking metadata"):
+        Packages(db).prepare(app)
+    assert not db.all("SELECT * FROM artifacts")

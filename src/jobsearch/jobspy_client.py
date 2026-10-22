@@ -17,7 +17,8 @@ class JobSpyClient:
             args=["-m", "jobsearch.mcp_server"],
             env={
                 "JSA_DATABASE_URL": s.database,
-                "JSA_STATE": str(s.state),
+                "JSA_STATE": str(s.auth_state or s.state),
+                "JSA_PROFILE": s.profile_id,
                 "JSA_WORKSPACE": str(s.workspace),
                 "JSA_JOBSPY": str(s.jobspy),
                 "JSA_ORIGIN": s.origin,

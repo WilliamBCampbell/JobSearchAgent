@@ -34,6 +34,7 @@ class Progress(BaseModel):
     status: Literal["ready", "blocked", "working", "paused"] = "ready"
     completed: list[bool] = Field(default_factory=lambda: [False] * 6)
     blockers: list[str] = Field(default_factory=list)
+    opening_blocked: bool = False
 
 
 def opening_current(official):
@@ -104,6 +105,24 @@ def progress(app, review_hash=None, review_error=None):
         result.button, result.action = "Verify official opening", "refresh-opening"
         result.status = "blocked"
         result.completed[0] = False
+        result.opening_blocked = True
+        official = app.get("official", {})
+        if official.get("status") == "unavailable":
+            result.title = "This opening is no longer available"
+            result.current = (
+                official.get("reason") or "The employer no longer lists this opening."
+            )
+            result.instruction = "Inspect the employer posting, keep your saved documents, or discard this role from active work."
+            result.following = "Your documents and answers remain saved. Continuing requires a current verified opening."
+            result.button = "Check opening again"
+        elif not official.get("open") and (
+            official.get("errors") or official.get("reason")
+        ):
+            result.title = "The opening could not be verified"
+            result.current = "The last check did not establish an open employer posting. This can happen when a posting is removed or the employer site cannot be reached."
+            result.instruction = "Inspect the employer posting before retrying. You can view saved documents or discard this role."
+            result.following = "Your documents and answers remain saved. Continuing requires a current verified opening."
+            result.button = "Retry opening check"
     elif not app.get("score", {}).get("scores"):
         result.title = "Evaluate the role against your evidence"
         result.current = "The official opening is verified. Fit has not been assessed."
@@ -253,6 +272,7 @@ def progress(app, review_hash=None, review_error=None):
             "form_fit": 0,
             "llm": 0,
             "draft_answer_context": 2,
+            "draft_form_answer": 2,
             "package": 1,
             "fill": 2,
         }.get(kind, result.step)
@@ -262,6 +282,7 @@ def progress(app, review_hash=None, review_error=None):
             "form_fit": "Checking new employer requirements",
             "llm": "Evaluating evidence",
             "draft_answer_context": "Drafting your project examples",
+            "draft_form_answer": "Preparing a suggested answer",
             "package": "Preparing your documents",
             "fill": "Preparing the employer application",
         }.get(kind, "Work is in progress")

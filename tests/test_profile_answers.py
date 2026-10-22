@@ -184,7 +184,8 @@ async def test_change_profile_answer_scrolls_prefills_and_preserves_correction(d
         page = await browser.new_page(viewport={"width": 1200, "height": 700})
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             row = page.get_by_role("row").filter(

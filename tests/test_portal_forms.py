@@ -292,12 +292,16 @@ async def test_guided_form_review_correction_and_approval_ui(db, fixture_server)
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Northstar Demo", exact=True).click()
             await page.get_by_text(
                 "Document previews and attachment selection", exact=True
             ).click()
+            await page.get_by_text("Resume PDF preview", exact=True).click()
             preview = page.get_by_role("img", name="Rendered resume page", exact=True)
             await expect(preview).to_be_visible()
             assert await preview.evaluate(

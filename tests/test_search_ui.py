@@ -30,7 +30,8 @@ async def test_search_button_switches_to_fixtures_and_displays_results(db):
                 ("applied_ai", "ai"),
                 ("solutions", "solutions"),
             ]:
-                await page.get_by_label("Workspace", exact=True).select_option("real")
+                await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+                await page.get_by_label("Data mode", exact=True).select_option("real")
                 await page.get_by_role("button", name="Find roles", exact=True).click()
                 details = page.get_by_text("Sample search for testing", exact=True)
                 if not await page.get_by_label("Search track", exact=True).is_visible():
@@ -51,10 +52,9 @@ async def test_search_button_switches_to_fixtures_and_displays_results(db):
                 await page.get_by_text(
                     "Sample search queued in the fixture workspace.", exact=False
                 ).wait_for()
-                assert (
-                    await page.get_by_label("Workspace", exact=True).input_value()
-                    == "fixture"
-                )
+                assert await page.locator(".sidebar-bottom").get_by_text(
+                    "Fixture demonstration", exact=True
+                ).is_visible()
                 job = db.one("SELECT * FROM jobs WHERE id=%s", (result["job_id"],))
                 assert job["input"]["mode"] == "fixture"
                 assert (
@@ -91,24 +91,32 @@ async def test_real_agent_button_starts_a_durable_run_and_restores_it(db):
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
             await page.get_by_role("button", name="Find roles", exact=True).click()
-            await page.get_by_label("Agent search track").select_option("solutions")
+            role = page.get_by_role("textbox", name="Role or keywords", exact=True)
+            button = page.get_by_role("button", name="Find my best matches", exact=True)
+            assert not await button.is_enabled()
+            await role.fill("   ")
+            assert not await button.is_enabled()
+            await role.fill('  technical account manager C++ / C# "API"  ')
+            await page.get_by_text("Evaluation settings", exact=True).click()
+            await page.get_by_label("Fit assessment track").select_option("solutions")
             async with page.expect_response(
                 lambda r: r.url.endswith("/api/hunts") and r.request.method == "POST"
             ) as pending:
-                await page.get_by_role(
-                    "button", name="Find my best matches", exact=True
-                ).click()
+                await role.press("Enter")
             response = await pending.value
             assert response.status == 200
             hunt = await response.json()
             assert (
                 hunt["candidate"] == "real" and hunt["request"]["track"] == "solutions"
             )
+            assert hunt["request"]["role"] == 'technical account manager C++ / C# "API"'
             assert db.one("SELECT count(*) n FROM jobs")["n"] == 1
             assert not db.all("SELECT * FROM llm_runs")
             await page.reload()
             await page.get_by_role("button", name="Find roles", exact=True).click()
             await page.get_by_role("button", name="Pause after current task").wait_for()
+            assert await role.input_value() == hunt["request"]["role"]
+            assert await role.is_disabled()
             await page.get_by_role("button", name="Pause after current task").click()
             await page.get_by_role(
                 "button", name="Resume search", exact=True

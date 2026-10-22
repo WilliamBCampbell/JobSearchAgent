@@ -237,6 +237,8 @@ def register_greenhouse_fixture(api, db):
             {"resume": {**record["detail"], "confirmed": True}},
         ):
             raise ValueError("The outgoing answers do not match approval")
+        if app["payload"].get("scenario") == "greenhouse_blocked_verification":
+            return JSONResponse({"code": "captcha-failed"}, status_code=428)
         if app["payload"].get("scenario") == "greenhouse_email_challenge":
             envelope = await request.json()
             if envelope.get("security_code") != "Ab12Cd34":
@@ -421,7 +423,8 @@ def register_greenhouse_fixture(api, db):
             const response=await fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(envelope)});
             if(response.ok)location.assign(location.href+'/confirmation');
             else if(response.status===428){
-                await response.json();
+                const failure=await response.json();
+                if(!failure.security_code_recipient){return;}
                 if(!form.querySelector('#security-input-0')){
                     const section=document.createElement('section');
                     section.innerHTML='<h2>Verify your email</h2>'+Array.from({length:8},(_,i)=>

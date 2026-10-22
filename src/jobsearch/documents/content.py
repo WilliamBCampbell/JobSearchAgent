@@ -16,6 +16,32 @@ INTERNAL = re.compile(
 )
 
 
+# Administrative identifiers belong in application records, not employer-facing prose.
+LETTER_METADATA = re.compile(
+    r"\b(?:requisition|req\.?|job[ _-]*(?:id|number)|posting[ _-]*id|application[ _-]*id)"
+    r"\s*(?:(?:id|number|no\.?)\s*)?[:#]?\s*(?=[a-z0-9_.-]*\d)[a-z0-9][a-z0-9_.-]*\b"
+    r"|\b(?:fact_ids|source_refs|evidence_versions|application_id|requisition_id)\b",
+    re.I,
+)
+
+
+def validate_cover_letter_text(text, application):
+    if LETTER_METADATA.search(text) or INTERNAL.search(text):
+        raise ValueError(
+            "Cover letter contains internal tracking metadata; remove requisition labels, IDs, and evidence notes"
+        )
+    for key in ("id", "requisition"):
+        value = str(application.get(key) or "").strip()
+        # Short numeric requisitions can coincide with legitimate dates or metrics.
+        # Their labeled forms are rejected above; longer identifiers are never prose.
+        if len(value) >= 6 and re.search(
+            r"(?<!\w)" + re.escape(value) + r"(?!\w)", text, re.I
+        ):
+            raise ValueError(
+                "Cover letter contains an application or requisition ID; remove internal tracking metadata"
+            )
+
+
 def employment_facts(facts):
     rows = [
         f
@@ -78,6 +104,8 @@ def validate_document(document, packet):
         if set(claim["fact_ids"]) - facts.keys():
             raise ValueError("Document cites an unknown or out-of-scope career fact")
         text = claim["text"]
+        if location.startswith("cover_letter."):
+            validate_cover_letter_text(text, packet.get("application") or {})
         if INTERNAL.search(text) or prose_check(text):
             raise ValueError(
                 f"Document contains internal notes or unfinished prose at {location}"

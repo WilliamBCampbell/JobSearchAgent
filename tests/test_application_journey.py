@@ -168,7 +168,8 @@ async def test_guided_manual_review_to_portal_and_receipt_with_edit_invalidation
         page.on("pageerror", lambda e: errors.append(str(e)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             guide = page.get_by_role("region", name="Application next step")
@@ -210,7 +211,8 @@ async def test_guided_manual_review_to_portal_and_receipt_with_edit_invalidation
                 "SELECT * FROM attempts"
             )
             await page.reload()
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             await expect(

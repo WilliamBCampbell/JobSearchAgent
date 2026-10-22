@@ -173,9 +173,20 @@ async def test_radio_scope_selection_persists_global_and_shows_scope_limits(db):
         page = await browser.new_page()
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role(
+                "button", name="Privacy & settings", exact=True
+            ).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
+            # These questions belong to an earlier workflow step in this fixture.
+            await expect(
+                page.locator('[data-workflow-section="question"] > summary')
+            ).to_have_count(4)
+            for summary in await page.locator(
+                '[data-workflow-section="question"] > summary'
+            ).all():
+                await summary.click()
             panel = page.locator("section.question").filter(
                 has=page.get_by_role("heading", name=spec["label"], exact=True)
             )

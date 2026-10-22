@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from uuid import uuid4
 import psycopg
+from psycopg import sql as pgsql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from .config import Settings, REPO
@@ -21,6 +22,19 @@ class DB:
     @contextmanager
     def tx(self):
         with psycopg.connect(self.settings.database, row_factory=dict_row) as conn:
+            # Never fall back to another profile's tables. Extensions live separately.
+            if (
+                self.settings.schema != "public"
+                and not conn.execute(
+                    "SELECT to_regnamespace(%s) AS name", (self.settings.schema,)
+                ).fetchone()["name"]
+            ):
+                raise ValueError("User profile storage is missing")
+            conn.execute(
+                pgsql.SQL("SET LOCAL search_path TO {}, jsa_extensions").format(
+                    pgsql.Identifier(self.settings.schema)
+                )
+            )
             yield conn
 
     def all(self, sql, params=()):
@@ -37,18 +51,21 @@ class DB:
 
     def migrate(self):
         with self.tx() as c:
-            c.execute("SELECT pg_advisory_xact_lock(881903)")
-            c.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations(name text PRIMARY KEY, applied_at timestamptz DEFAULT now())"
-            )
-            for path in sorted((REPO / "migrations").glob("*.sql")):
-                if not c.execute(
-                    "SELECT 1 FROM schema_migrations WHERE name=%s", (path.name,)
-                ).fetchone():
-                    c.execute(path.read_text())
-                    c.execute(
-                        "INSERT INTO schema_migrations(name) VALUES(%s)", (path.name,)
-                    )
+            self.migrate_connection(c)
+
+    def migrate_connection(self, c):
+        c.execute("SELECT pg_advisory_xact_lock(881903)")
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations(name text PRIMARY KEY, applied_at timestamptz DEFAULT now())"
+        )
+        for path in sorted((REPO / "migrations").glob("*.sql")):
+            if not c.execute(
+                "SELECT 1 FROM schema_migrations WHERE name=%s", (path.name,)
+            ).fetchone():
+                c.execute(path.read_text())
+                c.execute(
+                    "INSERT INTO schema_migrations(name) VALUES(%s)", (path.name,)
+                )
 
     def audit(self, event, subject, detail=None, conn=None):
         # Audit records reference evidence IDs. They never contain filled form values or secrets.

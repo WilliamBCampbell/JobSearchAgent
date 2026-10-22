@@ -204,6 +204,8 @@ def test_legacy_greenhouse_notice_offers_retry_without_changing_application(db):
     from jobsearch.notifications import Notifications
 
     flow, aid = prepared(db)
+    # The current journey requires a prepared package before offering form work.
+    flow.update_payload(aid, {"package": {"files": []}})
     flow.transition(aid, "filling")
     flow.transition(aid, "manual_handoff")
     flow.update_payload(
@@ -223,9 +225,9 @@ def test_legacy_greenhouse_notice_offers_retry_without_changing_application(db):
     notice = next(
         n
         for n in Notifications(db).snapshot("fixture")["items"]
-        if n["application_id"] == aid and n["kind"] == "handoff"
+        if n["application_id"] == aid and n["kind"] == "continue"
     )
-    assert notice["detail"]["title"] == "Greenhouse browser filling is available"
+    assert notice["detail"]["title"] == "Refresh the form to continue with the agent"
     assert flow.get(aid) == before
 
 
@@ -364,7 +366,8 @@ async def test_greenhouse_guided_ui_fills_then_approves_fixture(db, fixture_serv
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Example Greenhouse", exact=True).click()
             async with page.expect_response(lambda r: r.url.endswith("/fill")):
@@ -519,7 +522,8 @@ async def test_failed_upload_can_resume_from_ui_with_original_approval(
             try:
                 page = await browser.new_page()
                 await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-                await page.get_by_label("Workspace", exact=True).select_option(
+                await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+                await page.get_by_label("Data mode", exact=True).select_option(
                     "fixture"
                 )
                 await page.get_by_role(

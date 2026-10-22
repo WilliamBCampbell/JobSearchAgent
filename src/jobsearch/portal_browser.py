@@ -93,10 +93,11 @@ class PortalBrowser:
             headers = {
                 k: v
                 for k, v in request.headers.items()
-                if k.lower() not in ("x-jsa-token", "authorization", "cookie")
+                if k.lower()
+                not in ("x-jsa-token", "x-jsa-profile", "authorization", "cookie")
             }
             if app["candidate"] == "fixture":
-                headers["X-JSA-Token"] = self.db.settings.token()
+                headers.update(self.db.settings.local_headers())
             # After entering personal data, even GET requests can leak it. Permit only
             # the one reviewed POST and its receipt navigation. Resume parsing is blocked.
             approved_body = None

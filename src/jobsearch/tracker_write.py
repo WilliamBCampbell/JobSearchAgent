@@ -132,7 +132,7 @@ class TrackerWriter:
         if not status:
             raise ValueError("Application is not in a tracker-ready state")
         receipts = self.db.all(
-            "SELECT * FROM receipts WHERE application_id=%s ORDER BY created_at,id",
+            "SELECT * FROM receipts WHERE application_id=%s AND NOT COALESCE((evidence->>'invalidated')::boolean,false) ORDER BY created_at,id",
             (aid,),
         )
         if app["state"] == "submitted" and not receipts:

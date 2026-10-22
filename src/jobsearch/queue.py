@@ -20,7 +20,7 @@ def enqueue(db, kind, payload, max_attempts=3):
                 (payload["application_id"] + kind,),
             )
             existing = c.execute(
-                "SELECT id,status FROM jobs WHERE kind=%s AND input->>'application_id'=%s AND status IN ('queued','running') AND (kind NOT IN ('llm','draft_answer_context') OR input=%s)",
+                "SELECT id,status FROM jobs WHERE kind=%s AND input->>'application_id'=%s AND status IN ('queued','running') AND (kind NOT IN ('llm','draft_answer_context','draft_form_answer') OR input=%s)",
                 (kind, payload["application_id"], js(payload)),
             ).fetchone()
             if existing:
@@ -119,6 +119,18 @@ class Worker:
         from .workflow import Workflow
 
         flow = Workflow(self.db)
+        if kind == "draft_form_answer":
+            from .form_answers import FormAnswers
+
+            return await asyncio.to_thread(
+                FormAnswers(self.db).draft_answer,
+                data["application_id"],
+                data["question_id"],
+                jid,
+                lambda p: self.checkpoint(jid, p),
+                lambda: self.cancelled(jid),
+                source_urls=data.get("source_urls", []),
+            )
         if kind == "draft_answer_context":
             from .form_answers import FormAnswers
 
@@ -504,3 +516,41 @@ class Worker:
                     await asyncio.sleep(0.5)
         finally:
             await self.browser.close()
+
+
+class ProfileWorker:
+    """Poll each profile's queue fairly, retaining profile-bound browser sessions."""
+
+    def __init__(self, profiles):
+        self.profiles = profiles
+        self.workers = {}
+        self.stop = False
+
+    async def run_once(self):
+        from .db import DB
+
+        worked = False
+        for profile in await asyncio.to_thread(self.profiles.list):
+            if self.stop:
+                break
+            pid = profile["id"]
+            if pid not in self.workers:
+                settings = await asyncio.to_thread(self.profiles.resolve, pid)
+                self.workers[pid] = Worker(DB(settings))
+            worked = await self.workers[pid].run_once() or worked
+        return worked
+
+    async def close(self):
+        for worker in self.workers.values():
+            await worker.browser.close()
+
+    async def run(self):
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda: setattr(self, "stop", True))
+        try:
+            while not self.stop:
+                if not await self.run_once():
+                    await asyncio.sleep(0.5)
+        finally:
+            await self.close()

@@ -219,7 +219,8 @@ async def test_review_suggestions_regenerate_and_review_new_version(db, monkeypa
         page.on("pageerror", lambda e: errors.append(str(e)))
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Evaluation Demo").click()
             await expect(
                 page.get_by_role(
@@ -237,9 +238,8 @@ async def test_review_suggestions_regenerate_and_review_new_version(db, monkeypa
             await panel.get_by_role(
                 "button", name="Regenerate with my suggestions"
             ).click()
-            await expect(
-                panel.get_by_text("Your changes are being prepared.", exact=False)
-            ).to_be_visible()
+            await expect(page.locator("#work-progress")).to_have_attribute("open", "")
+            await expect(page.locator("#package-review").locator("xpath=..")).not_to_have_attribute("open", "")
             await worker.run_once()
             current = flow.get(aid)
             assert current["state"] == "prepared"

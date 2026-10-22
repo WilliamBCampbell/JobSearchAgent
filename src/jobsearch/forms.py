@@ -43,9 +43,9 @@ class FieldSpec(BaseModel):
     options: list[str] = Field(default_factory=list)
     material: bool = False
     qualification: bool = False
-    purpose: Literal["ordinary", "self_identification", "demographic_consent"] = (
-        "ordinary"
-    )
+    purpose: Literal[
+        "ordinary", "self_identification", "demographic_consent", "consent"
+    ] = "ordinary"
     binding: Literal["standard", "eeoc", "demographic", "data_compliance"] = "standard"
     option_ids: dict[str, str | int] = Field(default_factory=dict)
     free_form_options: list[str] = Field(default_factory=list)
@@ -53,7 +53,7 @@ class FieldSpec(BaseModel):
 
 class FormSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    adapter: Literal["lever", "greenhouse"]
+    adapter: Literal["lever", "greenhouse", "breezy"]
     version: int = 1
     url: str
     requisition: str
@@ -61,10 +61,14 @@ class FormSpec(BaseModel):
     notices: list[str] = Field(default_factory=list)
     unsupported: list[str] = Field(default_factory=list)
     submit_label: str = "Submit application"
+    question_ids: dict[str, str] = Field(default_factory=dict)
 
     @property
     def fingerprint(self):
-        return digest(self.model_dump())
+        contract = self.model_dump()
+        if not self.question_ids:
+            contract.pop("question_ids")
+        return digest(contract)
 
 
 # Exact contact labels map to profile keys. Custom answers default to application
@@ -424,6 +428,22 @@ class FormPreparation:
                     "The form requisition does not match the verified opening"
                 )
             spec = greenhouse_form(data, url, app["requisition"])
+        elif u.hostname and u.hostname.endswith(".breezy.hr"):
+            from .breezy import breezy_form
+
+            parts = u.path.strip("/").split("/")
+            if parts not in (
+                ["p", app["requisition"]],
+                ["p", app["requisition"], "apply"],
+            ):
+                raise ValueError("The Breezy route does not identify this requisition")
+            url = f"https://{u.hostname}/p/{app['requisition']}/apply"
+            final, body = service.fetch(url)
+            if final != url:
+                raise ValueError(
+                    "The Breezy application redirected; verify the opening again"
+                )
+            spec = breezy_form(body, url, app["requisition"], app["employer"])
         else:
             raise ValueError(
                 "This employer portal needs an application adapter. A normal-browser handoff is available"
@@ -483,13 +503,14 @@ class FormPreparation:
         app = self.flow.get(aid)
         answers, missing, consents = {}, [], {"employer_notices": spec.notices}
         assistance = FormAnswers(self.db)
-        corrections = {
-            q["key"]
+        saved_questions = {
+            q["key"]: q
             for q in self.db.all(
-                "SELECT key FROM questions WHERE application_id=%s AND needs_review",
+                "SELECT key,reason,needs_review FROM questions WHERE application_id=%s",
                 (aid,),
             )
         }
+        corrections = {key for key, q in saved_questions.items() if q["needs_review"]}
         resolutions, unknown = {}, []
         for field in spec.fields:
             if field.type == "file":
@@ -497,9 +518,9 @@ class FormPreparation:
             answer = Memory(self.db).resolve(
                 field.key, app["candidate"], aid, query=field.label, retrieve=False
             )
-            explicit = (
-                sensitive_field(field.model_dump())
-                or field.purpose == "demographic_consent"
+            explicit = sensitive_field(field.model_dump()) or field.purpose in (
+                "demographic_consent",
+                "consent",
             )
             if explicit:
                 facts = [
@@ -548,9 +569,14 @@ class FormPreparation:
                 and field.key not in corrections
             ):
                 previous = app["payload"].get("answers", {}).get(field.key, {})
+                reason = saved_questions.get(field.key, {}).get("reason", {})
                 if assistance.valid(app, field.model_dump(), previous):
                     answer = previous
                     self.db.metric("form_answer_evidence_reused")
+                elif assistance.valid(
+                    app, field.model_dump(), reason.get("suggestion", {}), draft=True
+                ):
+                    answer = {"source": "question", "reason": reason}
                 elif field.required:
                     unknown.append(field.model_dump())
             resolutions[field.key] = answer
@@ -634,8 +660,12 @@ class FormPreparation:
             "fingerprint": spec.fingerprint,
             "inspected_at": datetime.now(timezone.utc).isoformat(),
         }
-        if spec.adapter == "greenhouse":
-            accepted = {f.name + ".pdf" for f in spec.fields if f.type == "file"}
+        if spec.adapter in ("greenhouse", "breezy"):
+            accepted = {
+                (f.name if spec.adapter == "greenhouse" else f.key) + ".pdf"
+                for f in spec.fields
+                if f.type == "file"
+            }
             selected = []
             for artifact_id in app["payload"].get("attachments", []):
                 artifact = self.db.one(
@@ -798,6 +828,13 @@ class FormPreparation:
                 and parts[2].isdigit()
                 and original.path == u.path
             )
+            breezy_route = (
+                spec.adapter == "breezy"
+                and u.hostname
+                and u.hostname.endswith(".breezy.hr")
+                and parts == ["p", app["requisition"], "apply"]
+                and original.path.strip("/").split("/")[:2] == parts[:2]
+            )
             if (
                 u.scheme != "https"
                 or u.port not in (None, 443)
@@ -805,7 +842,7 @@ class FormPreparation:
                 or u.query
                 or u.fragment
                 or original.hostname != u.hostname
-                or not (lever_route or greenhouse_route)
+                or not (lever_route or greenhouse_route or breezy_route)
             ):
                 raise ValueError(
                     "The planned route does not match the official employer requisition"
@@ -881,6 +918,14 @@ class FormPreparation:
             raise ValueError(
                 "This adapter requires exactly one reviewed PDF resume and one resume upload control"
             )
+        if spec.adapter == "breezy":
+            if (
+                len(files) != 1
+                or files[0].key != "resume"
+                or len(selected) != 1
+                or selected[0]["kind"] != "resume.pdf"
+            ):
+                raise ValueError("Select one PDF resume for this Breezy form")
         if spec.adapter == "greenhouse":
             names = {f.name for f in files}
             if names - {"resume", "cover_letter"}:

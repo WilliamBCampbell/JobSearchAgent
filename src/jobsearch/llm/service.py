@@ -204,6 +204,9 @@ class InferenceService:
                 raise ValueError("Package review requires the exact draft")
             packet["package_document"] = request.package_document.model_dump()
         if request.task in FORM_TASKS:
+            from ..employer_research import EmployerResearch
+
+            packet["sources"].extend(EmployerResearch(self.db).sources(app))
             from ..self_identification import sensitive_field
 
             if any(sensitive_field(f.model_dump()) for f in request.form_fields):
@@ -475,11 +478,12 @@ class InferenceService:
                         raise InferenceFailure(
                             "Application answer needs a prose revision"
                         )
-                    if answer["key"] in packet["personal_questions"] and not set(
-                        answer["fact_ids"]
-                    ).intersection(packet["personal_context_ids"]):
+                    if (
+                        answer["key"] in packet["personal_questions"]
+                        and answer["decision"] != "draft"
+                    ):
                         raise InferenceFailure(
-                            "Personal motivation cannot be inferred from career fit"
+                            "Personal motivation requires a draft for user review"
                         )
         if task == "package_draft":
             from ..documents.content import validate_document

@@ -18,10 +18,12 @@ from .test_greenhouse_native_contract import native_request
     "code,recipient,pending",
     [
         ("captcha-failed", "alex@example.test", True),
+        ("captcha-failed", None, False),
         ("invalid-security-code", None, True),
         ("expired-security-code", None, False),
         ("security-code-error", None, False),
         ("unknown", None, False),
+        ("private-fixture-token", None, False),
     ],
 )
 async def test_response_classification_does_not_store_challenge_content(
@@ -54,10 +56,85 @@ async def test_response_classification_does_not_store_challenge_content(
     )
     assert transport.verification_pending is pending
     assert transport.post_status == 428
+    stored = json.dumps([params[0].obj for _, params in events])
     assert all(
-        secret not in repr(events)
+        secret not in stored
         for secret in ("Ab12Cd34", "private-fixture-token", "alex@example.test")
     )
+
+
+def test_browser_diagnostics_store_categories_without_console_text():
+    spec, payload, _ = native_request()
+    events = []
+    db = SimpleNamespace(
+        settings=SimpleNamespace(origin="http://127.0.0.1:8766"),
+        execute=lambda *args: events.append(args),
+    )
+    transport = GreenhouseTransport(
+        db, {"id": "fixture", "candidate": "fixture"}, spec, {"payload": payload}, {}
+    )
+    transport.browser_console(
+        SimpleNamespace(
+            text="recaptcha: Content Security Policy blocked a connection; private-token alex@example.test"
+        )
+    )
+    assert transport.browser_diagnostics == {"recaptcha_csp_blocked": True}
+    stored = json.dumps([params[0].obj for _, params in events])
+    assert "private-token" not in stored
+    assert "alex@example.test" not in stored
+    assert "recaptcha_csp_blocked" in stored
+
+
+async def test_428_without_a_verification_step_offers_outcome_recovery(
+    db, fixture_server
+):
+    flow, aid = prepared(db, "greenhouse_blocked_verification")
+    worker = Worker(db)
+    try:
+        await worker.browser.fill(aid)
+        flow.authorize(
+            aid, ApprovalInput(approve=True, reviewed_hash=flow.review(aid)["hash"])
+        )
+        await worker.run_once()
+        assert flow.get(aid)["state"] == "unresolved"
+        result = db.one("SELECT result FROM attempts WHERE application_id=%s", (aid,))[
+            "result"
+        ]
+        assert result["post_status"] == 428
+        assert result["response_code"] == "captcha-failed"
+        assert result["response_format"] == "json"
+        assert not db.all("SELECT * FROM receipts")
+        recovery = flow.submission_recovery(aid)
+        assert recovery["can_confirm_not_submitted"]
+        assert not recovery["can_retry"]
+        with pytest.raises(ValueError):
+            flow.retry_submission(aid)
+        assert not db.all("SELECT * FROM jobs WHERE status IN ('queued','running')")
+    finally:
+        await worker.browser.close()
+
+
+async def test_428_with_email_verification_keeps_its_browser_continuation(
+    db, fixture_server
+):
+    flow, aid = prepared(db, "greenhouse_email_challenge")
+    worker = Worker(db)
+    try:
+        await worker.browser.fill(aid)
+        flow.authorize(
+            aid, ApprovalInput(approve=True, reviewed_hash=flow.review(aid)["hash"])
+        )
+        await worker.run_once()
+        assert flow.get(aid)["state"] == "awaiting_challenge"
+        result = db.one("SELECT result FROM attempts WHERE application_id=%s", (aid,))[
+            "result"
+        ]
+        assert result["challenge_type"] == "email"
+        assert result["response_code"] == "captcha-failed"
+        assert not flow.submission_recovery(aid)["can_retry"]
+        assert not db.all("SELECT * FROM receipts")
+    finally:
+        await worker.browser.close()
 
 
 async def test_continuation_releases_only_one_matching_request():
@@ -65,7 +142,11 @@ async def test_continuation_releases_only_one_matching_request():
     events = []
     db = SimpleNamespace(
         settings=SimpleNamespace(
-            origin="http://127.0.0.1:8766", token=lambda: "fixture"
+            origin="http://127.0.0.1:8766",
+            local_headers=lambda: {
+                "X-JSA-Token": "fixture",
+                "X-JSA-Profile": "default",
+            },
         ),
         execute=lambda *args: events.append(args),
         audit=lambda *args: events.append(args),
@@ -109,6 +190,7 @@ async def test_continuation_releases_only_one_matching_request():
     valid = route()
     await transport.handle(valid, {"phase": "send"})
     valid.continue_.assert_awaited_once()
+    assert valid.continue_.await_args.kwargs["headers"]["X-JSA-Profile"] == "default"
     repeated = route()
     await transport.handle(repeated, {"phase": "send"})
     repeated.continue_.assert_not_awaited()
@@ -146,7 +228,8 @@ async def test_email_challenge_wrong_code_then_receipt_same_approval(
         page = worker.browser.greenhouse.sessions[aid]["page"]
         ui = await worker.browser.greenhouse.sessions[aid]["browser"].new_page()
         await ui.goto(db.settings.origin + "/#token=" + db.settings.token())
-        await ui.get_by_label("Workspace", exact=True).select_option("fixture")
+        await ui.get_by_role("button", name="Privacy & settings", exact=True).click()
+        await ui.get_by_label("Data mode", exact=True).select_option("fixture")
         await ui.get_by_role("button", name="Applications", exact=True).click()
         await ui.get_by_text("Example Greenhouse", exact=True).click()
         await expect(

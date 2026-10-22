@@ -70,6 +70,39 @@ def test_native_blank_history_is_not_a_career_claim_or_consent():
         )
 
 
+def test_native_checkbox_answers_match_the_reviewed_option_ids():
+    spec, payload, body = native_request()
+    spec.fields.append(
+        FieldSpec(
+            key="tools",
+            name="question_2[]",
+            label="Coding tools",
+            type="checkbox",
+            required=True,
+            options=["Editor", "Assistant", "Other"],
+        )
+    )
+    payload["answers"]["tools"] = {"value": ["Editor", "Assistant"]}
+    options = {"question_2[]": {"Editor": 11, "Assistant": 12, "Other": 13}}
+    selected = {"0": {"question_option_id": 11}, "1": {"question_option_id": 12}}
+    body["job_application"]["answers_attributes"] = {
+        "2": {"question_id": "2", "answer_selected_options_attributes": selected}
+    }
+    assert validate_application(json.dumps(body).encode(), spec, payload, options, {})
+    for changed in (
+        {"0": {"question_option_id": 11}},
+        selected | {"2": {"question_option_id": 13}},
+        {"0": {"question_option_id": 11}, "1": {"question_option_id": 11}},
+    ):
+        bad = deepcopy(body)
+        bad["job_application"]["answers_attributes"]["2"][
+            "answer_selected_options_attributes"
+        ] = changed
+        assert not validate_application(
+            json.dumps(bad).encode(), spec, payload, options, {}
+        )
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -100,7 +133,11 @@ async def test_blocked_request_reports_reason_without_logging_answers_or_tokens(
     events = []
     db = SimpleNamespace(
         settings=SimpleNamespace(
-            token=lambda: "local-fixture-token", origin="http://127.0.0.1:8766"
+            local_headers=lambda: {
+                "X-JSA-Token": "local-fixture-token",
+                "X-JSA-Profile": "default",
+            },
+            origin="http://127.0.0.1:8766",
         ),
         execute=lambda *args: events.append(args),
         audit=lambda *args: events.append(args),
@@ -134,3 +171,31 @@ async def test_blocked_request_reports_reason_without_logging_answers_or_tokens(
     ):
         assert private not in repr(events)
         assert private not in transport.error
+
+
+@pytest.mark.parametrize(
+    "url,allowed",
+    [
+        ("https://www.google.com/recaptcha/enterprise.js", True),
+        ("https://www.google.com/recaptcha/enterprise/clr", True),
+        ("https://www.recaptcha.net/recaptcha/enterprise/clr", True),
+        ("https://www.gstatic.com/recaptcha/releases/example/script.js", True),
+        ("https://www.google.com/other", False),
+        ("https://www.google.com.evil.invalid/recaptcha/enterprise.js", False),
+        ("http://www.google.com/recaptcha/enterprise.js", False),
+    ],
+)
+async def test_recaptcha_endpoints_keep_the_employer_verification_enabled(url, allowed):
+    spec, payload, _ = native_request()
+    db = SimpleNamespace(settings=SimpleNamespace(origin="http://127.0.0.1:8766"))
+    transport = GreenhouseTransport(
+        db, {"id": "synthetic", "candidate": "real"}, spec, {"payload": payload}, {}
+    )
+    checks = []
+    transport.check = lambda: checks.append(True)
+    route = SimpleNamespace(
+        request=SimpleNamespace(url=url, method="GET"), continue_=AsyncMock()
+    )
+    assert await transport.handle(route, {"phase": "send"}) is allowed
+    assert bool(checks) is allowed
+    assert route.continue_.await_count == int(allowed)

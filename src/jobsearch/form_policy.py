@@ -76,15 +76,20 @@ def narrative_context_key(field):
 
 
 def answer_guidance(field):
-    if not experience_narrative(field):
+    if not experience_narrative(field) and not (
+        personal_question(field) and field.get("type") in ("text", "textarea")
+    ):
         return None
     mismatch = narrative_choice_mismatch(field)
     return {
         "narrative": True,
+        "single_line": field.get("type") == "text",
         "choice_mismatch": mismatch,
         "message": (
             "The employer asks for examples but its form only accepts a choice. Write your examples and interview-demo details below for this application's records. Separately choose the option to send. Your notes will not be inserted into another field or attachment."
             if mismatch
+            else "Connect your experience with the employer and role. Review any suggested wording before confirming your answer."
+            if personal_question(field)
             else "Describe the project, what you contributed, and what you can show. Use confirmed examples and identify any limits on sharing the work."
         ),
     }

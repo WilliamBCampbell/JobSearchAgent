@@ -14,8 +14,16 @@ PROFILE_LABELS = {
         "linkedin profile url",
         "linkedin profile link",
         "your linkedin profile",
+        "linkedin: if you have no linkedin page type n/a",
     },
-    "github": {"github", "github url", "github profile", "github profile url"},
+    "github": {
+        "github",
+        "github url",
+        "github profile",
+        "github profile url",
+        "github: if you have no github page type n/a",
+    },
+    "state": {"state", "state of residence", "what state are you located in"},
     "website": {"personal website", "personal website url"},
     "email": {"email", "email address", "e-mail", "e-mail address"},
     "phone": {"phone", "phone number", "telephone", "telephone number"},
@@ -48,7 +56,14 @@ def mapping(field):
     label = re.sub(r"\s+", " ", field["label"].strip().casefold()).rstrip("?:* ")
     label = re.sub(r"\s*\(optional\)$", "", label)
     for key, labels in PROFILE_LABELS.items():
-        if label in labels and not field.get("material") and not field.get("options"):
+        if (
+            label in labels
+            and not field.get("material")
+            and (
+                not field.get("options")
+                or (key == "state" and field.get("type") == "select")
+            )
+        ):
             return key, "identity"
     if not field.get("material"):
         if REFERRAL_STATUS.fullmatch(label):

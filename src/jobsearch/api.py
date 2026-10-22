@@ -31,6 +31,7 @@ from .notifications import Notifications
 from .requirement_decisions import RequirementDecisions, RequirementDecisionInput
 from .answer_scopes import allows_global
 from .package_review import PackageReview, PackageRevisionInput, PackageReviewInput
+from .user_profiles import UserProfiles, ProfileInput, ProfileRoutingMiddleware
 
 
 class TrackerUpdateInput(BaseModel):
@@ -70,6 +71,10 @@ class AnswerInput(BaseModel):
     scope: Literal["application", "global"] = "application"
 
 
+class AnswerDraftInput(BaseModel):
+    source_urls: list[str] = Field(default_factory=list, max_length=4)
+
+
 class ResolveInput(BaseModel):
     key: str
     candidate: Literal["real", "fixture"] = "fixture"
@@ -85,14 +90,19 @@ class RetrievalInput(BaseModel):
     rerank: bool = False
 
 
-def create_app(settings=None):
+def create_app(settings=None, *, manage_profiles=True):
     settings = settings or Settings()
     db = DB(settings)
     flow = Workflow(db)
+    user_profiles = UserProfiles(settings) if manage_profiles else None
 
     @asynccontextmanager
     async def lifespan(app):
-        db.migrate()
+        if user_profiles:
+            user_profiles.initialize()
+            settings.workspace = user_profiles.resolve("default").workspace
+        else:
+            db.migrate()
         yield
 
     app = FastAPI(
@@ -103,6 +113,21 @@ def create_app(settings=None):
         redoc_url=None,
     )
     app.state.db = db
+
+    if user_profiles:
+        app.add_middleware(
+            ProfileRoutingMiddleware,
+            profiles=user_profiles,
+            factory=lambda selected: create_app(selected, manage_profiles=False),
+        )
+
+        @app.get("/api/profiles")
+        def list_user_profiles():
+            return user_profiles.list()
+
+        @app.post("/api/profiles", status_code=201)
+        def create_user_profile(data: ProfileInput):
+            return user_profiles.create(data)
 
     @app.middleware("http")
     async def security(request: Request, call_next):
@@ -189,6 +214,7 @@ def create_app(settings=None):
         )
         return {
             "candidate": candidate,
+            "profile_id": settings.profile_id,
             "workspace": str(
                 settings.workspace
                 if candidate == "real"
@@ -393,9 +419,39 @@ def create_app(settings=None):
         )
         fields = {f["key"]: f for f in result["payload"].get("form_schema", [])}
         for question in result["questions"]:
-            from .form_policy import answer_guidance, narrative_context_key
+            from .form_policy import (
+                answer_guidance,
+                narrative_context_key,
+                requires_explicit_answer,
+            )
 
             field = fields.get(question["key"], {})
+            question["can_suggest"] = bool(
+                field.get("type") in ("text", "textarea")
+                and not field.get("options")
+                and field.get("purpose", "ordinary") == "ordinary"
+                and not requires_explicit_answer(field)
+                and (not question["answer_fact"] or question["needs_review"])
+                and not result["paused"]
+                and not result["imported"]
+                and result["state"]
+                in (
+                    "missing_answers",
+                    "review",
+                    "prepared",
+                    "selected",
+                    "scored",
+                    "manual_handoff",
+                )
+                and not db.one("SELECT 1 FROM attempts WHERE application_id=%s", (aid,))
+            )
+            if (
+                question["can_suggest"]
+                and question.get("reason", {}).get("code") == "personal_context_needed"
+            ):
+                question["reason"] = question["reason"] | {
+                    "message": "Request a suggestion connecting your career history with this role, or write your own answer. Review the wording before confirming it."
+                }
             guidance = answer_guidance(field) if field else None
             question["answer_guidance"] = guidance
             if guidance and guidance["choice_mismatch"]:
@@ -451,9 +507,12 @@ def create_app(settings=None):
                         "message": "Evidence changed after this draft was prepared. Prepare the answers again before using it."
                     }
                     question["reason"].pop("suggestion", None)
-        result["receipts"] = db.all(
+        result["receipt_history"] = db.all(
             "SELECT * FROM receipts WHERE application_id=%s", (aid,)
         )
+        result["receipts"] = [
+            r for r in result["receipt_history"] if not r["evidence"].get("invalidated")
+        ]
         result["approvals"] = db.all(
             "SELECT * FROM approvals WHERE application_id=%s", (aid,)
         )
@@ -751,6 +810,25 @@ def create_app(settings=None):
             db,
             "draft_answer_context",
             {"application_id": q["application_id"], "question_id": qid},
+            max_attempts=1,
+        )
+
+    @app.post("/api/questions/{qid}/draft-answer")
+    def draft_answer(qid: str, data: AnswerDraftInput):
+        from .form_answers import FormAnswers
+
+        q = db.one("SELECT application_id FROM questions WHERE id=%s", (qid,))
+        if not q:
+            raise ValueError("Question not found")
+        FormAnswers(db).context_question(q["application_id"], qid, answer=True)
+        return enqueue(
+            db,
+            "draft_form_answer",
+            {
+                "application_id": q["application_id"],
+                "question_id": qid,
+                "source_urls": data.source_urls,
+            },
             max_attempts=1,
         )
 

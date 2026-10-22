@@ -133,14 +133,24 @@ def validate_application(body, spec, payload, options, uploads, errors=None):
                 if f.type in ("text", "textarea", "email", "url", "tel"):
                     if answer.pop("text_value", "") != value or answer:
                         return reject()
-                elif f.type in ("select", "multiselect"):
+                elif f.type in ("select", "multiselect", "checkbox"):
                     from .self_identification import choices
 
-                    if not choices(f, value):
+                    if f.type == "checkbox":
+                        from .forms import valid_value
+
+                        if value == "" and not f.required:
+                            value = []
+                        if not valid_value(f, value):
+                            return reject()
+                        chosen = value
+                    else:
+                        chosen = choices(f, value)
+                    if not chosen:
                         if not empty(answer):
                             return reject()
                     else:
-                        if f.type == "multiselect":
+                        if f.type in ("multiselect", "checkbox"):
                             selected = answer.pop(
                                 "answer_selected_options_attributes", {}
                             )
@@ -355,6 +365,7 @@ class GreenhouseTransport:
         self.verification_pending = False
         self.verification_allowed = False
         self.verification_count = 0
+        self.browser_diagnostics = {}
         self.request_token = None  # Native token stays in this browser process only.
         self.response_ready = asyncio.Event()
         self.response_ready.set()
@@ -368,6 +379,8 @@ class GreenhouseTransport:
 
     def progress(self, stage, **detail):
         self.stage = stage
+        if self.browser_diagnostics:
+            detail["browser_diagnostics"] = dict(self.browser_diagnostics)
         if self.attempt:
             self.db.execute(
                 "UPDATE attempts SET result=result || %s WHERE id=%s",
@@ -378,6 +391,14 @@ class GreenhouseTransport:
             WHERE kind IN ('submit','continue_verification') AND input->>'application_id'=%s AND status='running'""",
             (js({"stage": stage, **detail}), self.app["id"]),
         )
+
+    def browser_console(self, message):
+        # Retain a category only. Console text can contain answers or tokens.
+        text = message.text.lower()
+        if "recaptcha" in text and "content security policy" in text:
+            if not self.browser_diagnostics.get("recaptcha_csp_blocked"):
+                self.browser_diagnostics["recaptcha_csp_blocked"] = True
+                self.progress(self.stage)
 
     def check(self):
         app = self.flow.get(self.app["id"])
@@ -428,7 +449,7 @@ class GreenhouseTransport:
         )
         if presign and request.method == "GET" and gate["phase"] == "inspect":
             self.check()
-            headers = {"X-JSA-Token": self.db.settings.token()} if self.fixture else {}
+            headers = self.db.settings.local_headers() if self.fixture else {}
             async with httpx.AsyncClient(timeout=15) as client:
                 response = await client.get(request.url, headers=headers)
                 response.raise_for_status()
@@ -464,8 +485,9 @@ class GreenhouseTransport:
                 return True
             headers = dict(request.headers)
             headers.pop("x-jsa-token", None)
+            headers.pop("x-jsa-profile", None)
             if self.fixture:
-                headers["X-JSA-Token"] = self.db.settings.token()
+                headers.update(self.db.settings.local_headers())
             if request.method == "POST":
                 field, url, body, kind = approved_upload(
                     self.db,
@@ -504,8 +526,9 @@ class GreenhouseTransport:
                 return True
             headers = dict(request.headers)
             headers.pop("x-jsa-token", None)
+            headers.pop("x-jsa-profile", None)
             if self.fixture:
-                headers["X-JSA-Token"] = self.db.settings.token()
+                headers.update(self.db.settings.local_headers())
             if request.method == "POST":
                 # A verification POST continues the same native application.
                 # Never persist its code or token, or permit a general resend.
@@ -578,7 +601,7 @@ class GreenhouseTransport:
             await route.continue_(headers=headers)
             return True
         if request.url == self.receipt_url and request.method == "GET" and self.posted:
-            headers = {"X-JSA-Token": self.db.settings.token()} if self.fixture else {}
+            headers = self.db.settings.local_headers() if self.fixture else {}
             await route.continue_(headers=headers)
             return True
         # Approved sessions may use the employer's verification provider. Never
@@ -587,7 +610,10 @@ class GreenhouseTransport:
             not self.fixture
             and u.scheme == "https"
             and (
-                (u.hostname == "www.recaptcha.net" and u.path.startswith("/recaptcha/"))
+                (
+                    u.hostname in ("www.recaptcha.net", "www.google.com")
+                    and u.path.startswith("/recaptcha/")
+                )
                 or (
                     u.hostname == "www.gstatic.com" and u.path.startswith("/recaptcha/")
                 )
@@ -629,6 +655,18 @@ class GreenhouseTransport:
                 try:
                     body = await response.json()
                     kind = body.get("code")
+                    safe_code = (
+                        kind
+                        if isinstance(kind, str)
+                        and kind
+                        in {
+                            "captcha-failed",
+                            "invalid-security-code",
+                            "expired-security-code",
+                            "security-code-error",
+                        }
+                        else "unrecognized"
+                    )
                     email_challenge = (
                         kind == "captcha-failed"
                         and isinstance(body.get("security_code_recipient"), str)
@@ -648,9 +686,16 @@ class GreenhouseTransport:
                             else "needs_attention"
                         ),
                         post_status=428,
+                        response_format="json",
+                        response_code=safe_code,
                     )
                 except Exception:
-                    self.progress("verification_blocked", post_status=428)
+                    self.progress(
+                        "verification_blocked",
+                        post_status=428,
+                        response_format="unreadable",
+                        response_code="unavailable",
+                    )
             self.response_ready.set()
         if response.url == self.receipt_url and response.request.method == "GET":
             self.receipt_status = response.status

@@ -2,6 +2,18 @@
 
 The application consists of a FastAPI service, a React/TypeScript UI, a separate Python worker, PostgreSQL 17 with pgvector, and an MCP stdio server. Personal state lives under `JSA_STATE`; originals stay under `JSA_WORKSPACE`. The API binds to `127.0.0.1:8765` and the database binds to `127.0.0.1:55432`.
 
+## User profile isolation
+
+Migration 010 adds the shared `public.user_profiles` registry. Existing tables and private files remain in place for the `default` profile. Each additional profile has a PostgreSQL schema and a directory under `JSA_STATE/profiles/<id>`. Its source workspace is an existing, separate folder recorded in the registry. Creating a profile does not import files or copy another profile's confirmed facts or model consent.
+
+Connections select exactly one profile schema and the shared `jsa_extensions` schema, which contains pgvector. Additional profiles never search `public` for application tables. Missing profile storage fails closed. Profile registration, schema creation, and migrations commit together. Startup migrates every registered profile.
+
+The API selects a bound application instance using `X-JSA-Profile` or the `profile` query parameter. Conflicting selectors fail; an unknown profile never falls back to the default. Requests without a selector retain the default profile for existing integrations. Authentication uses the installation's shared token. This supports local household use, not separate authenticated accounts or mutually untrusted tenants. Database credentials remain deployment credentials with access to all schemas.
+
+The UI stores the profile in its page URL and reloads on a switch, clearing drafts and pending views. Document and handoff links carry the profile so other tabs cannot redirect them. The worker keeps one bound worker and browser-session collection per profile and polls all registered queues. New profiles are discovered while it runs. MCP subprocesses receive the originating profile ID and installation state root. Approval, receipt, qualification, and tracker review gates remain in their existing services.
+
+The full database backup and private-state archive include all profiles. Deployment environment overrides still control live capabilities; provider/model opt-in settings are profile-specific.
+
 ## State and execution
 
 PostgreSQL stores documents, versions, chunks, typed facts, answer caches, applications, approvals, attempts, receipts, artifacts, jobs, conflicts, follow-ups, metrics, and audit events. Versioned SQL migrations run under a database lock. The queue claims work using `FOR UPDATE SKIP LOCKED`, renews leases, saves checkpoints, bounds retries, and preserves cancellation requests. Jobs for the same application are serialized. Duplicate active jobs of the same kind return the existing ID.
@@ -41,7 +53,7 @@ Ingestion preserves document identities and content-hash versions. Chunks retain
 
 PostgreSQL full-text search and pgvector cosine search produce candidate rankings, fused by reciprocal rank. Optional term-overlap reranking is available. Small documents expand in full, including later pages; larger ones expand the parent section and neighboring chunks within a character budget. Failed or incomplete extraction is shown to the user. DOCX page positions are hints; paragraph and table references are the stable locators. Scanned PDFs need external OCR or manual extraction.
 
-The default embedding provider is a deterministic fixture surrogate for offline evaluation. It is not a learned semantic model. The Ollama provider supports learned embeddings at a configured local or remote server. Language-model judgments use a separate typed inference service with Codex and offline fixture backends. No text is sent until the user enables the displayed destination. A provider or embedding-model change requires re-ingestion. The tested deployment uses exact pgvector search without HNSW: variable provider dimensions and this single-user corpus do not justify an approximate index or separate vector service. Add a model-specific HNSW index only after measuring latency and recall on the selected embedding model.
+The default embedding provider is a deterministic fixture surrogate for offline evaluation. It is not a learned semantic model. The Ollama provider supports learned embeddings at a configured local or remote server. Language-model judgments use a separate typed inference service with Codex and offline fixture backends. No text is sent until the user enables the displayed destination. A provider or embedding-model change requires re-ingestion. The tested deployment uses exact pgvector search without HNSW: variable provider dimensions and these local per-profile corpora do not justify an approximate index or separate vector service. Add a model-specific HNSW index only after measuring latency and recall on the selected embedding model.
 
 ## Approval and recovery
 

@@ -1,3 +1,5 @@
+import { WorkflowSection } from "./ApplicationSections";
+import { profileUrl } from "./UserProfiles";
 import { useEffect, useState } from "react";
 import { answerText } from "./answerText";
 
@@ -16,11 +18,7 @@ export function manualPackageReviewed(a: Row, review: Row | null) {
   return !!review && !(a.questions || []).some((q: Row) => !q.answer_fact || q.needs_review) && a.payload.handoff_review?.reviewed_hash === review.hash;
 }
 
-export function ApplicationJourney({application: a, review, realSending, busy, onAction, onNavigate, receiptOpen, onReceipt}: {
-  application: Row; review: Row | null; realSending: boolean; busy: boolean;
-  onAction: (action: string, body?: Row) => void; onNavigate: (id: string) => void;
-  receiptOpen: boolean; onReceipt: () => void;
-}) {
+export function applicationJourney(a: Row, review: Row | null, realSending: boolean, receiptOpen: boolean): Row {
   const received = (a.receipts || []).length > 0;
   const attempted = (a.attempts || []).length > 0;
   const manual = a.state === "manual_handoff";
@@ -114,6 +112,20 @@ export function ApplicationJourney({application: a, review, realSending, busy, o
   if (p.step === 3 && !manual && a.candidate === "real" && !realSending) p = {...p,
     following: "Sending to real employers is disabled in this deployment. Enable it in settings before approving, or use a normal-browser handoff.",
   };
+  return p;
+}
+
+export function ApplicationJourney({application: a, review, realSending, busy, onAction, onNavigate, receiptOpen, onReceipt}: {
+  application: Row; review: Row | null; realSending: boolean; busy: boolean;
+  onAction: (action: string, body?: Row) => void; onNavigate: (id: string) => void;
+  receiptOpen: boolean; onReceipt: () => void;
+}) {
+  const received = (a.receipts || []).length > 0;
+  const attempted = (a.attempts || []).length > 0;
+  const manual = a.state === "manual_handoff";
+  const reviewed = manualPackageReviewed(a, review);
+  const job = (a.jobs || []).find((j: Row) => ["running", "queued"].includes(j.status));
+  const p = applicationJourney(a, review, realSending, receiptOpen);
   const done = p.completed;
   return <section className="panel application-journey" id="application-journey" aria-label="Application next step">
     <ol className="journey-steps" aria-label="Application steps">
@@ -131,8 +143,14 @@ export function ApplicationJourney({application: a, review, realSending, busy, o
     </p>}
     {p.button === "Open employer application" ? <a className="primary-link" href={a.official?.application_url} target="_blank" rel="noreferrer">{p.button}</a> :
       <button disabled={busy || (!!job && !!p.action && p.action !== "resume")} onClick={() => p.action ? onAction(p.action === "resume" ? "control" : p.action, p.action === "resume" ? {action: "resume"} : {}) : onNavigate(p.target)}>{p.button}</button>}
+    {p.opening_blocked && p.status === "blocked" && !job && !a.paused && <div className="actions">
+      {(a.official?.application_url || a.official?.url) && <a className="secondary" href={a.official.application_url || a.official.url} target="_blank" rel="noreferrer">Inspect employer posting</a>}
+      {!!a.payload.package && <button className="secondary" onClick={() => onNavigate("prepared-documents")}>View saved documents</button>}
+      <button className="text-button" disabled={busy || !a.can_discard} title={a.discard_blocker || "Keep the saved history and remove this role from active work"}
+        onClick={() => onAction("control", {action: "discard", reason: "Discarded after reviewing the unavailable or unverified opening"})}>Discard this role</button>
+    </div>}
     {manual && !received && <button className="text-button" onClick={onReceipt}>Already submitted? Record the confirmation</button>}
-    {manual && reviewed && a.handoff_ready && <p><a href={"/api/handoffs/" + a.id} target="_blank" rel="noreferrer">Open the saved answers beside the employer form</a></p>}
+    {manual && reviewed && a.handoff_ready && <p><a href={profileUrl("/api/handoffs/" + a.id)} target="_blank" rel="noreferrer">Open the saved answers beside the employer form</a></p>}
   </section>;
 }
 
@@ -159,21 +177,17 @@ export function ManualPackageReview({
   );
   if (!review)
     return (
+      <WorkflowSection section="manual-review" summary="Review answers and files">
       <section className="panel" id="manual-package-review">
         <h2>{error ? "Package review needs attention" : "Loading your package review"}</h2>
         <p role="status">{error || "Checking the saved answers and selected file versions. The review will appear here when those checks finish."}</p>
         {error && <><button onClick={() => onNavigate("prepared-answers")}>Check saved answers</button><button className="secondary" onClick={() => onNavigate("prepared-documents")}>Check selected files</button></>}
       </section>
+      </WorkflowSection>
     );
   return (
-    <details
-      className="panel manual-package-review"
-      id="manual-package-review"
-      open={!done}
-    >
-      <summary>
-        {done ? "Prepared package reviewed" : "Review answers and files"}
-      </summary>
+    <WorkflowSection section="manual-review" className="panel manual-package-review" id="manual-package-review"
+      summary={done ? "Prepared package reviewed" : "Review answers and files"}>
       <p>
         <strong>
           {a.employer} · {a.role}
@@ -191,7 +205,7 @@ export function ManualPackageReview({
           {review.payload.attachments.map((f: Row) => (
             <li key={f.id}>
               <a
-                href={"/api/artifacts/" + f.id}
+                href={profileUrl("/api/artifacts/" + f.id)}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -277,6 +291,6 @@ export function ManualPackageReview({
           requires a new review.
         </p>
       )}
-    </details>
+    </WorkflowSection>
   );
 }

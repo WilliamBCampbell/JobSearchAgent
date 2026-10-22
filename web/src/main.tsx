@@ -9,10 +9,13 @@ import { EvaluationDesk, ModelSettings } from "./Inference";
 import { SearchAgent } from "./Hunt";
 import { InterventionInbox } from "./Interventions";
 import { RequirementReview, fitValidationMessages } from "./RequirementReview";
-import { applicationColumns, sortApplications, type ApplicationSort, type ApplicationColumn } from "./applicationSorting";
+import { applicationColumns, defaultApplicationSort, sortApplications, type ApplicationSort, type ApplicationColumn } from "./applicationSorting";
 import { latestPreparedDocuments } from "./preparedDocuments";
-import { ApplicationJourney, ManualPackageReview, hasGreenhouseBrowser } from "./ApplicationJourney";
+import { ApplicationSections, WorkflowSection } from "./ApplicationSections";
+import { applicationJourney, ApplicationJourney, ManualPackageReview, hasGreenhouseBrowser } from "./ApplicationJourney";
 import { PackageReview } from "./PackageReview";
+import { CreateUserProfile, UserProfiles, profileUrl } from "./UserProfiles";
+import { EmployerApplicationLink } from "./EmployerApplicationLink";
 
 type Row = Record<string, any>;
 let unlockToken = "";
@@ -21,7 +24,7 @@ async function api(
   body?: unknown,
   method?: string,
 ): Promise<any> {
-  const r = await fetch("/api" + path, {
+  const r = await fetch(profileUrl("/api" + path), {
     method: method || (body === undefined ? "GET" : "POST"),
     headers: {
       "Content-Type": "application/json",
@@ -59,7 +62,7 @@ function Json({ data, label = "Evidence" }: { data: any; label?: string }) {
   );
 }
 function App() {
-  const [applicationSort, setApplicationSort] = useState<ApplicationSort | null>(null);
+  const [applicationSort, setApplicationSort] = useState<ApplicationSort>(defaultApplicationSort);
   const sortQueue = (column: ApplicationColumn) => setApplicationSort(previous => ({
     column,
     direction: previous?.column === column
@@ -98,6 +101,7 @@ function App() {
   const [receiptNote, setReceiptNote] = useState(""),
     [answerDrafts, setAnswerDrafts] = useState<Record<string, any>>({}),
     [contextDrafts, setContextDrafts] = useState<Record<string, string>>({}),
+    [researchDrafts, setResearchDrafts] = useState<Record<string, string>>({}),
     [scopeDrafts, setScopeDrafts] = useState<Record<string, string>>({}),
     [focusQuestionId, setFocusQuestionId] = useState<string | null>(null),
     [manualReceiptOpen, setManualReceiptOpen] = useState(false);
@@ -117,6 +121,7 @@ function App() {
     if (!focusQuestionId || page !== "application") return;
     const panel = document.getElementById("question-" + focusQuestionId);
     if (!panel) return;
+    navigateSection("question-" + focusQuestionId);
     const input = panel.querySelector<HTMLElement>(
       "input:not([type=radio]), textarea, select",
     );
@@ -161,7 +166,7 @@ function App() {
     const t = h.get("token");
     if (t) {
       unlockToken = t;
-      history.replaceState(null, "", location.pathname);
+      history.replaceState(null, "", location.pathname + location.search);
       api("/session", {})
         .then(() => {
           unlockToken = "";
@@ -318,9 +323,10 @@ function App() {
         <div className="wordmark">
           <span className="brandmark">J</span>
           <div>
-            Job Search<small>Local workspace</small>
+            Job Search<small>User profiles</small>
           </div>
         </div>
+        <UserProfiles api={api} busy={busy} />
         <nav>
           {[
             ["overview", "Overview"],
@@ -359,7 +365,7 @@ function App() {
               {
                 (
                   {
-                    overview: "Search workspace",
+                    overview: "Overview",
                     workspace: "Documents & sources",
                     facts: "Profile & confirmed answers",
                     search: "Find your next role",
@@ -375,22 +381,6 @@ function App() {
               }
             </h1>
           </div>
-          <label className="switch">
-            Workspace
-            <select
-              aria-label="Workspace"
-              value={candidate}
-              onChange={(e) => {
-                setCandidate(e.target.value);
-                setAppId("");
-                setApplication(null);
-                setPage("overview");
-              }}
-            >
-              <option value="fixture">Fixture demonstration</option>
-              <option value="real">Existing job_search records</option>
-            </select>
-          </label>
         </header>
         <div className="privacy-strip">
           <span className="dot" />
@@ -918,6 +908,9 @@ function App() {
         {page === "applications" && (
           <section className="panel">
             <h2>{overview.applications.length} applications</h2>
+            {applicationSort.column === "state" && <p className="muted">
+              {applicationSort.direction === "ascending" ? "Active, unsubmitted applications first" : "Inactive applications first"}, then highest fit score. Unscored applications appear last in each group.
+            </p>}
             <table aria-label="Application queue">
               <thead>
                 <tr>
@@ -954,11 +947,12 @@ function App() {
           </section>
         )}
         {page === "application" && application && (
-          <>
+          <ApplicationSections application={application} journey={applicationJourney(application, review, overview.real_submission_enabled, manualReceiptOpen)}>
             <section className="panel application-heading">
               <div>
                 <p className="eyebrow">Requisition {application.requisition}</p>
                 <h2>{application.role}</h2>
+                <EmployerApplicationLink application={application} />
                 {application.imported && <p>
                   {application.payload.form_plan &&
                   application.state === "awaiting_challenge"
@@ -979,10 +973,11 @@ function App() {
                 setTimeout(() => navigateSection("receipt-section"), 0);
               }}
             />}
-            {!application.imported && <SelectionReview application={application} busy={busy} onSelect={(body) => action("select", body)} onNavigate={navigateSection} />}
+            {!application.imported && application.state === "scored" && application.selection_review && <WorkflowSection section="selection" summary="Role selection decision">
+              <SelectionReview application={application} busy={busy} onSelect={(body) => action("select", body)} onNavigate={navigateSection} />
+            </WorkflowSection>}
             {!application.imported && (
-              <details id="workflow-controls">
-              <summary>Other actions and handoff tools</summary>
+              <WorkflowSection section="controls" id="workflow-controls" summary="Other actions and handoff tools">
               <div className="actions controls">
                 <button
                   className="secondary"
@@ -1038,7 +1033,7 @@ function App() {
                 </button>
                 {application.handoff_ready && (
                   <a
-                    href={"/api/handoffs/" + appId}
+                    href={profileUrl("/api/handoffs/" + appId)}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -1046,7 +1041,7 @@ function App() {
                   </a>
                 )}
               </div>
-              </details>
+              </WorkflowSection>
             )}
             {application.imported ? (
               <section className="panel">
@@ -1096,8 +1091,7 @@ function App() {
                   </button>
                 )}
                 {application.score?.scores && (
-                  <details id="role-fit" open={application.progress?.step === 0 && application.progress?.status !== "working"}>
-                  <summary>Role fit and supporting evidence</summary>
+                  <WorkflowSection section="fit" id="role-fit" summary="Role fit and supporting evidence">
                   <section className="panel">
                     <div className="section-title">
                       <div>
@@ -1149,7 +1143,7 @@ function App() {
                       label="Compensation, Ohio eligibility, and official source"
                     />
                   </section>
-                  </details>
+                  </WorkflowSection>
                 )}
                 {["prepared", "review"].includes(application.state) && !application.payload.package?.version && (
                   <button
@@ -1160,8 +1154,7 @@ function App() {
                     Regenerate from current facts
                   </button>
                 )}
-                {application.package_review?.version && <details open={application.progress?.step === 1}>
-                <summary>{application.package_review?.reviewed ? "Reviewed documents and revision options" : "Document review"}</summary>
+                {application.package_review?.version && <WorkflowSection section="documents" summary={application.package_review?.reviewed ? "Reviewed documents and revision options" : "Document review"}>
                 <PackageReview key={application.id} application={application} busy={busy}
                   onPreview={() => navigateSection("prepared-documents")}
                   onRevise={(version, notes) => run(() => api(`/applications/${appId}/package-revisions`, {version, notes}), "Your suggestions were saved. The agent is preparing a new document version.")}
@@ -1171,10 +1164,9 @@ function App() {
                     return result;
                   }}
                 />
-                </details>}
+                </WorkflowSection>}
                 {application.artifacts?.length > 0 && (
-                  <details id="prepared-documents" open={application.progress?.step === 1}>
-                  <summary>Document previews and attachment selection</summary>
+                  <WorkflowSection section="documents" id="prepared-documents" summary="Document previews and attachment selection">
                   <section className="panel">
                     <h2>Prepared documents</h2>
                     <p>
@@ -1185,7 +1177,7 @@ function App() {
                       {currentArtifacts.filter((f: Row) => !f.kind.endsWith(".preview.png")).map((f: Row) => (
                         <div key={f.id}>
                           <a
-                            href={"/api/artifacts/" + f.id}
+                            href={profileUrl("/api/artifacts/" + f.id)}
                             target="_blank"
                             rel="noreferrer"
                           >
@@ -1238,11 +1230,10 @@ function App() {
                       ))}
                     </div>
                     {documentPreviews.map((f: Row) => (
-                      <details key={f.id} open={f.kind === "resume.preview.png"}>
-                        <summary>{f.kind.startsWith("resume") ? "Resume PDF preview" : "Cover letter PDF preview"}</summary>
+                      <WorkflowSection key={f.id} section="documents" summary={f.kind.startsWith("resume") ? "Resume PDF preview" : "Cover letter PDF preview"}>
                         <img className="document-preview" alt={f.kind.startsWith("resume") ? "Rendered resume page" : "Rendered cover letter page"}
-                          src={"/api/artifacts/" + f.id + "?preview=true"} />
-                      </details>
+                          src={profileUrl("/api/artifacts/" + f.id + "?preview=true")} />
+                      </WorkflowSection>
                     ))}
                     {documentPreviews.length === 0 && currentArtifacts.find(
                       (a: Row) => a.kind === "resume.html",
@@ -1250,29 +1241,28 @@ function App() {
                       <iframe
                         title="Resume preview"
                         sandbox=""
-                        src={
+                        src={profileUrl(
                           "/api/artifacts/" +
                           currentArtifacts.find(
                             (a: Row) => a.kind === "resume.html",
                           )!.id +
                           "?preview=true"
-                        }
+                        )}
                       />
                     )}
                     {previousArtifacts.length > 0 && (
                       <details>
                         <summary>Previous document versions</summary>
                         <ul>{previousArtifacts.map((f: Row) => (
-                          <li key={f.id}><a href={"/api/artifacts/" + f.id} target="_blank" rel="noreferrer">{title(f.kind)} · {f.hash.slice(0, 10)}</a>{application.payload.attachments?.includes(f.id) && " · Selected attachment"}</li>
+                          <li key={f.id}><a href={profileUrl("/api/artifacts/" + f.id)} target="_blank" rel="noreferrer">{title(f.kind)} · {f.hash.slice(0, 10)}</a>{application.payload.attachments?.includes(f.id) && " · Selected attachment"}</li>
                         ))}</ul>
                       </details>
                     )}
                   </section>
-                  </details>
+                  </WorkflowSection>
                 )}
                 {application.payload.form_plan && (
-                  <details id="prepared-answers" open={application.progress?.step === 2}>
-                  <summary>Prepared answers and sources</summary>
+                  <WorkflowSection section="answers" id="prepared-answers" summary="Prepared answers and sources">
                   <EmployerFormPlan
                     application={application}
                     onCorrect={(key) =>
@@ -1289,7 +1279,7 @@ function App() {
                       })
                     }
                   />
-                  </details>
+                  </WorkflowSection>
                 )}
                 {application.questions
                   ?.filter(
@@ -1299,7 +1289,8 @@ function App() {
                       q.id === editingQuestion,
                   )
                   .map((q: Row) => (
-                    <section className="panel question" key={q.id} id={"question-" + q.id} tabIndex={-1}>
+                    <WorkflowSection section="question" key={q.id} summary={q.prompt} forceOpen={q.id === editingQuestion}>
+                    <section className="panel question" id={"question-" + q.id} tabIndex={-1}>
                       <p className="eyebrow">
                         {q.id === editingQuestion || q.needs_review
                           ? "EDIT ANSWER"
@@ -1309,6 +1300,38 @@ function App() {
                       </p>
                       <h2>{q.prompt}</h2>
                       {q.reason?.message && <p>{q.reason.message}</p>}
+                      {q.can_suggest && <div className="answer-suggestions">
+                        <p>Suggest an answer using this profile’s confirmed records, the posting, and saved employer research.</p>
+                        <details>
+                          <summary>Add employer research links</summary>
+                          <label>Public employer pages, one URL per line
+                            <textarea aria-label="Employer research URLs" rows={3}
+                              placeholder="https://company.example/products"
+                              value={researchDrafts[q.id] || ""}
+                              onChange={e => setResearchDrafts(previous => ({...previous, [q.id]: e.target.value}))} />
+                          </label>
+                          <p>Up to four pages. Their text becomes evidence for this application’s suggestions.</p>
+                        </details>
+                        <button type="button" className="secondary"
+                          disabled={busy || application.jobs?.some((j: Row) => j.kind === "draft_form_answer" && j.input?.question_id === q.id && ["queued", "running"].includes(j.status))}
+                          onClick={() => run(() => api(`/questions/${q.id}/draft-answer`, {
+                            source_urls: (researchDrafts[q.id] || "").split("\n").map(s => s.trim()).filter(Boolean),
+                          }), "Preparing a suggested answer for your review.")}>
+                          {q.reason?.suggestion ? "Refresh suggestion" : "Suggest an answer"}
+                        </button>
+                      </div>}
+                      {q.reason?.suggestion && <div className="answer-suggestion">
+                        <h3>AI suggestion</h3>
+                        <p>Review the details and wording before confirming your answer.</p>
+                        <blockquote className="narrative-draft">{answerText(q.reason.suggestion.value)}</blockquote>
+                        <button type="button" className="secondary" onClick={() => setAnswerDrafts(previous => ({...previous, [q.id]: q.reason.suggestion.value}))}>Use suggestion in my answer</button>
+                      </div>}
+                      {q.reason?.suggestion && q.reason?.employer_sources?.length > 0 && <details>
+                        <summary>Employer sources for this suggestion</summary>
+                        <ul>{q.reason.employer_sources.map((s: Row) => <li key={s.id}>
+                          {s.url ? <a href={s.url} target="_blank" rel="noopener noreferrer">{s.title}</a> : s.title}
+                        </li>)}</ul>
+                      </details>}
                       {q.reason?.context?.length > 0 && (
                         <details>
                           <summary>
@@ -1396,7 +1419,7 @@ function App() {
                             <EmployerAnswerInput
                               field={{...application.payload.form_schema.find(
                                 (f: Row) => f.key === q.key,
-                              ), ...(q.answer_guidance?.narrative && !q.answer_guidance?.choice_mismatch ? {type: "textarea"} : {})}}
+                              ), ...(q.answer_guidance?.narrative && !q.answer_guidance?.choice_mismatch && !q.answer_guidance?.single_line ? {type: "textarea"} : {})}}
                               value={
                                 answerDrafts[q.id] ??
                                 q.reason?.suggestion?.value
@@ -1443,8 +1466,10 @@ function App() {
                         <button disabled={busy}>Confirm answer</button>
                       </form>
                     </section>
+                    </WorkflowSection>
                   ))}
-                {application.state === "review" && review && application.progress?.step === 3 && (
+                {review && ["review", "authorized", "submission_attempt", "receipt_verification", "awaiting_challenge", "unresolved", "submitted", "follow_up"].includes(application.state) && (
+                  <WorkflowSection section="final-review" summary="Final application review">
                   <section className="panel final-review" id="final-review">
                     <p className="eyebrow">FINAL REVIEW</p>
                     <h2>
@@ -1518,7 +1543,7 @@ function App() {
                           a normal-browser handoff.
                         </p>
                       )}
-                    <button
+                    {application.state === "review" && application.progress?.step === 3 && <button
                       className="approve"
                       disabled={
                         busy ||
@@ -1537,13 +1562,14 @@ function App() {
                       {application.candidate === "fixture"
                         ? "Approve & submit fixture application"
                         : "Approve & send this application"}
-                    </button>
+                    </button>}
                   </section>
+                  </WorkflowSection>
                 )}
               </>
             )}
             {application.receipts?.length > 0 && (
-              <section className="panel receipt" id="receipt-section">
+              <WorkflowSection section="receipt" summary="Employer confirmation"><section className="panel receipt" id="receipt-section">
                 <p className="eyebrow">RECEIPT CONFIRMED</p>
                 <h2>Application received</h2>
                 {application.receipts.map((r: Row) => (
@@ -1554,10 +1580,10 @@ function App() {
                   </div>
                 ))}
                 {!application.imported && <TrackerSync id={appId} api={api} onSaved={() => { void refresh(); }} />}
-              </section>
+              </section></WorkflowSection>
             )}
             {application.submission_recovery?.can_confirm_not_submitted && (
-              <section className="panel" id="submission-outcome">
+              <WorkflowSection section="outcome" summary="Resolve submission outcome"><section className="panel" id="submission-outcome">
                 <h2>Not submitted</h2>
                 <p>Greenhouse stopped at verification. Use this option only if you did not finish verification or submit this application in another browser. A verification-code email is not an application receipt.</p>
                 <label className="checkbox">
@@ -1578,10 +1604,10 @@ function App() {
                   Confirm not submitted
                 </button>
                 <p>This records the outcome. You can then choose Retry approved application.</p>
-              </section>
+              </section></WorkflowSection>
             )}
             {((application.state === "unresolved" && !application.submission_recovery?.can_retry) || (application.state === "manual_handoff" && (manualReceiptOpen || application.attempts?.length > 0))) && (
-              <section className="panel" id="receipt-section">
+              <WorkflowSection section="receipt" summary="Employer confirmation"><section className="panel" id="receipt-section">
                 <h2>Record employer confirmation</h2>
                 <p>
                   Use this only when the employer confirmed receipt of your application. Record that confirmation page or email. A verification-code email does not count. If the outcome is unknown, leave it unresolved.
@@ -1605,10 +1631,9 @@ function App() {
                 >
                   I confirm employer receipt
                 </button>
-              </section>
+              </section></WorkflowSection>
             )}
-            <details id="work-progress" open={application.jobs?.some((j: Row) => ["queued", "running"].includes(j.status)) || application.jobs?.[0]?.status === "failed"}>
-              <summary>Agent activity and submission records</summary>
+            <WorkflowSection section="activity" id="work-progress" summary="Agent activity and submission records">
             <Json
               data={{
                 approvals: application.approvals,
@@ -1620,8 +1645,8 @@ function App() {
               jobs={application.jobs || []}
               run={run}
             />
-            </details>
-          </>
+            </WorkflowSection>
+          </ApplicationSections>
         )}
         {page === "audit" && (
           <>
@@ -1672,6 +1697,27 @@ function App() {
         )}
         {page === "settings" && settings && (
           <>
+            <CreateUserProfile api={api} busy={busy} />
+            <section className="panel">
+              <h2>Data mode</h2>
+              <p>Use your profile’s records for your job search. Demonstration mode shows synthetic records for testing.</p>
+              <label className="switch">
+                Data mode
+                <select
+                  aria-label="Data mode"
+                  value={candidate}
+                  onChange={(e) => {
+                    setCandidate(e.target.value);
+                    setAppId("");
+                    setApplication(null);
+                    setPage("overview");
+                  }}
+                >
+                  <option value="fixture">Fixture demonstration</option>
+                  <option value="real">Current profile records</option>
+                </select>
+              </label>
+            </section>
             <section className="panel">
               <h2>Document search</h2>
               <p>

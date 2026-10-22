@@ -27,11 +27,17 @@ def main():
         ],
     )
     parser.add_argument("--candidate", choices=["real", "fixture"], default="real")
+    parser.add_argument("--profile", default=os.getenv("JSA_PROFILE", "default"))
     parser.add_argument(
         "--mode", choices=["enabled", "disabled", "status"], default="status"
     )
     args = parser.parse_args()
     settings = Settings()
+    from .user_profiles import UserProfiles, selected_settings
+
+    profiles = UserProfiles(settings)
+    if args.command not in ("serve", "worker", "migrate"):
+        settings = selected_settings(settings, args.profile)
     db = DB(settings)
     if args.command == "tracker-writes":
         if args.mode == "status":
@@ -94,7 +100,7 @@ def main():
                 else "Real sending is disabled."
             )
     elif args.command == "migrate":
-        db.migrate()
+        profiles.initialize()
         print("Migrations applied.")
     elif args.command == "serve":
         import uvicorn
@@ -102,10 +108,15 @@ def main():
 
         uvicorn.run(create_app(settings), host="127.0.0.1", port=8765, access_log=False)
     elif args.command == "worker":
-        from .queue import Worker
+        from .queue import Worker, ProfileWorker
 
-        db.migrate()
-        asyncio.run(Worker(db).run())
+        profiles.initialize()
+        worker = (
+            Worker(DB(profiles.resolve(args.profile)))
+            if args.profile != "default"
+            else ProfileWorker(profiles)
+        )
+        asyncio.run(worker.run())
     elif args.command == "seed":
         from .fixtures import seed
 
@@ -140,7 +151,9 @@ def main():
     elif args.command == "token":
         print(settings.token())
     elif args.command == "open":
-        webbrowser.open(settings.origin + "/#token=" + settings.token())
+        webbrowser.open(
+            settings.origin + settings.profile_url("/") + "#token=" + settings.token()
+        )
         print("Opened the authenticated local workspace.")
 
 

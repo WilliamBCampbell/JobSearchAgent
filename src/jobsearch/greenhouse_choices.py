@@ -34,7 +34,7 @@ async def validate(page, f):
     info = await c.evaluate("""e=>({label:(document.querySelector('label[for="'+e.id+'"]')?.textContent || '').replace(/\\*/g,'').trim(),
         required:e.required || e.getAttribute('aria-required')==='true',type:e.type})""")
     label = "Are you Hispanic/Latino?" if name == "hispanic_ethnicity" else f.label
-    if info["label"] != label or info["required"] != f.required:
+    if info["label"] != label.strip() or info["required"] != f.required:
         raise ValueError("The employer changed this question: " + f.label)
     if f.binding == "data_compliance":
         if info["type"] != "checkbox":

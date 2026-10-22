@@ -90,6 +90,9 @@ class Settings:
 
     live_applications: bool | None = None
     live_tracker_writes: bool | None = None
+    profile_id: str = "default"
+    schema: str = "public"
+    auth_state: Path | None = None
 
     def __post_init__(self):
         if self.state.is_relative_to(REPO):
@@ -124,10 +127,21 @@ class Settings:
         return self.state / "fixture-workspace"
 
     def token(self):
-        path = self.state / "api-token"
+        path = (self.auth_state or self.state) / "api-token"
         if not path.exists():
             atomic_write(path, secrets.token_urlsafe(32))
         return path.read_text().strip()
+
+    def local_headers(self):
+        return {"X-JSA-Token": self.token(), "X-JSA-Profile": self.profile_id}
+
+    def profile_url(self, path):
+        from urllib.parse import quote
+
+        if self.profile_id == "default":
+            return path
+        separator = "&" if "?" in path else "?"
+        return path + separator + "profile=" + quote(self.profile_id)
 
     def source_path(self, relative: str, candidate="real"):
         root = self.workspace if candidate == "real" else self.fixture_workspace

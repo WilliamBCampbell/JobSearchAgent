@@ -204,7 +204,8 @@ async def test_requirement_decisions_and_rescore_ui(
         worker = Worker(db)
         try:
             await page.goto(db.settings.origin + "/#token=" + db.settings.token())
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             panel = page.get_by_role("region", name="Central requirement decisions")
@@ -230,7 +231,8 @@ async def test_requirement_decisions_and_rescore_ui(
                 )
             ).to_be_visible()
             await page.reload()
-            await page.get_by_label("Workspace", exact=True).select_option("fixture")
+            await page.get_by_role("button", name="Privacy & settings", exact=True).click()
+            await page.get_by_label("Data mode", exact=True).select_option("fixture")
             await page.get_by_role("button", name="Applications", exact=True).click()
             await page.get_by_text("Evaluation Demo", exact=True).click()
             await expect(

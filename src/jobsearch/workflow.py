@@ -550,6 +550,7 @@ class Workflow:
                 "browser_hash",
                 "package",
                 "scenario",
+                "employer_research",
             }:
                 raise ValueError("Unknown payload property")
             payload = app["payload"] | patch
@@ -635,6 +636,15 @@ class Workflow:
         self.editable(app)
         if self.db.one("SELECT 1 FROM attempts WHERE application_id=%s", (app["id"],)):
             raise ValueError("Attempted application answers are immutable")
+        if q["reason"].get("code") == "answer_too_long":
+            limit = q["reason"]["max_length"]
+            if (
+                not isinstance(value, str)
+                or len(value.encode("utf-16-le")) // 2 > limit
+            ):
+                raise ValueError(
+                    f"The employer allows at most {limit} characters for this answer"
+                )
         if app["state"] in (
             "submission_attempt",
             "receipt_verification",
@@ -802,7 +812,9 @@ class Workflow:
             return False
         event = self.db.one(
             """SELECT detail FROM audit WHERE event='greenhouse.attempt_finished'
-            AND subject=%s AND detail->>'attempt_id'=%s ORDER BY seq DESC LIMIT 1""",
+            AND subject=%s AND detail->>'attempt_id'=%s
+            AND NOT COALESCE(detail->>'stage'='opening_form' AND detail->'post_observed'='false'::jsonb AND detail->'post_status'='null'::jsonb,false)
+            ORDER BY seq DESC LIMIT 1""",
             (app["id"], attempt["id"]),
         )
         return bool(
@@ -825,7 +837,9 @@ class Workflow:
             return None
         event = self.db.one(
             """SELECT seq,at,detail FROM audit WHERE event='greenhouse.attempt_finished'
-            AND subject=%s AND detail->>'attempt_id'=%s ORDER BY seq DESC LIMIT 1""",
+            AND subject=%s AND detail->>'attempt_id'=%s
+            AND NOT COALESCE(detail->>'stage'='opening_form' AND detail->'post_observed'='false'::jsonb AND detail->'post_status'='null'::jsonb,false)
+            ORDER BY seq DESC LIMIT 1""",
             (app["id"], attempt["id"]),
         )
         if (
@@ -1068,6 +1082,10 @@ class Workflow:
     def record_receipt(self, aid, attempt_id, evidence, kind="employer_confirmation"):
         if kind not in ("employer_confirmation", "user_confirmation"):
             raise ValueError("Unsupported receipt type")
+        if evidence.get("adapter") == "breezy" and evidence.get("read_only_recheck"):
+            raise ValueError(
+                "A public Breezy thank-you page is not an employer receipt"
+            )
         if (
             not evidence.get("confirmed")
             or not evidence.get("text")
@@ -1119,12 +1137,49 @@ class Workflow:
         Tracker(self.db).manual_report(app["candidate"])
         return {"state": "submitted", "receipt_id": rid}
 
-    def unresolved(self, aid, reason):
+    def unresolved(self, aid, reason, *, retract_public_breezy_receipts=False):
         with self.db.tx() as c:
             app = self.get(aid, c)
             self.editable(app)
             if app["state"] == "submitted":
-                return
+                if not retract_public_breezy_receipts:
+                    return
+                receipts = c.execute(
+                    "SELECT * FROM receipts WHERE application_id=%s FOR UPDATE", (aid,)
+                ).fetchall()
+                if not receipts or any(
+                    r["kind"] != "employer_confirmation"
+                    or r["evidence"].get("adapter") != "breezy"
+                    or r["evidence"].get("read_only_recheck") is not True
+                    for r in receipts
+                ):
+                    raise ValueError(
+                        "Only receipts inferred from a public Breezy page can be retracted"
+                    )
+                for receipt in receipts:
+                    c.execute(
+                        "UPDATE receipts SET evidence=evidence || %s WHERE id=%s",
+                        (
+                            js(
+                                {
+                                    "confirmed": False,
+                                    "invalidated": True,
+                                    "invalidation_reason": reason,
+                                }
+                            ),
+                            receipt["id"],
+                        ),
+                    )
+                    self.db.audit(
+                        "receipt.retracted",
+                        aid,
+                        {"receipt_id": receipt["id"], "reason": reason},
+                        c,
+                    )
+                c.execute(
+                    "UPDATE attempts SET state='unresolved' WHERE application_id=%s",
+                    (aid,),
+                )
             c.execute(
                 "UPDATE applications SET state='unresolved',revision=revision+1 WHERE id=%s",
                 (aid,),
